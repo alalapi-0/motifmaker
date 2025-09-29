@@ -23,5 +23,7 @@ jobs:
         run: isort --check-only src tests
       - name: Type check with mypy
         run: mypy src
+      - name: Document flake8 policy
+        run: echo "flake8 检查由 black/isort 组合替代，避免重复规则冲突"
       - name: Run tests
         run: pytest -q

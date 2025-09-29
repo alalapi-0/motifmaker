@@ -32,6 +32,19 @@ class ProjectSpec(BaseModel):
     style: str
     instrumentation: List[str]
     motif_specs: Dict[str, Dict[str, Any]]
+    rhythm_density: str = Field(
+        "medium", description="Global rhythm density hint (low/medium/high)"
+    )
+    motif_style: str = Field(
+        "ascending-return",
+        description="High-level motif style template (ascending_arc/wavering/zigzag)",
+    )
+    harmony_level: str = Field(
+        "basic", description="Harmony complexity level (basic/colorful)"
+    )
+    generated_sections: Dict[str, Dict[str, Any]] | None = Field(
+        default=None, description="Cached summaries produced during rendering"
+    )
 
 
 DEFAULT_FORM_TEMPLATE: Dict[str, Sequence[tuple[str, int, float]]] = {
@@ -47,7 +60,15 @@ DEFAULT_FORM_TEMPLATE: Dict[str, Sequence[tuple[str, int, float]]] = {
 
 
 def default_from_prompt_meta(meta: Dict[str, Any]) -> ProjectSpec:
-    """Construct a :class:`ProjectSpec` from prompt meta information."""
+    """Construct a :class:`ProjectSpec` from prompt meta information.
+
+    Args:
+        meta: Parsed metadata produced by :func:`motifmaker.parsing.parse_natural_prompt`.
+
+    Returns:
+        A :class:`ProjectSpec` with populated form sections, motif specifications and
+        global controls such as rhythm density, motif style and harmony level.
+    """
 
     key = meta.get("key", "C")
     mode = meta.get("mode", "major")
@@ -80,13 +101,26 @@ def default_from_prompt_meta(meta: Dict[str, Any]) -> ProjectSpec:
     motif_specs = {
         "primary": {
             "contour": meta.get("primary_contour", "ascending-return"),
-            "rhythm_density": meta.get("primary_rhythm", "medium"),
+            "rhythm_density": meta.get(
+                "primary_rhythm", meta.get("rhythm_density", "medium")
+            ),
+            "motif_style": meta.get(
+                "motif_style", meta.get("primary_contour", "ascending-return")
+            ),
         },
         "contrast": {
             "contour": meta.get("contrast_contour", "wave"),
             "rhythm_density": meta.get("contrast_rhythm", "syncopated"),
         },
     }
+
+    rhythm_density = (
+        meta.get("rhythm_density") or meta.get("primary_rhythm") or "medium"
+    )
+    motif_style = (
+        meta.get("motif_style") or meta.get("primary_contour") or "ascending-return"
+    )
+    harmony_level = meta.get("harmony_level") or "basic"
 
     return ProjectSpec(
         form=form_sections,
@@ -97,6 +131,9 @@ def default_from_prompt_meta(meta: Dict[str, Any]) -> ProjectSpec:
         style=style,
         instrumentation=instrumentation,
         motif_specs=motif_specs,
+        rhythm_density=str(rhythm_density),
+        motif_style=str(motif_style),
+        harmony_level=str(harmony_level),
     )
 
 
