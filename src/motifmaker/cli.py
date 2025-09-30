@@ -1,8 +1,7 @@
-"""Command line interface for the Motifmaker prototype."""
+"""命令行工具：支持 Prompt 生成、分轨渲染、局部再生与工程持久化。"""
 
 from __future__ import annotations
 
-import json
 import logging
 from pathlib import Path
 from typing import Optional
@@ -10,11 +9,12 @@ from typing import Optional
 import typer
 
 from .parsing import parse_natural_prompt
+from .persistence import load_project_json, save_project_json
 from .render import RenderResult, regenerate_section, render_project
 from .schema import ProjectSpec, default_from_prompt_meta
 from .utils import configure_logging, ensure_directory
 
-app = typer.Typer(help="Layered music generation prototype")
+app = typer.Typer(help="分层音乐生成原型 CLI")
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -26,26 +26,15 @@ _VALID_HARMONIES = {"basic", "colorful"}
 def _validate_choice(
     value: Optional[str], valid: set[str], option_name: str, label: str
 ) -> Optional[str]:
-    """Validate optional CLI choice values.
-
-    Args:
-        value: Raw value provided by the user.
-        valid: Allowed set of lowercase strings.
-        option_name: Option flag used for error提示。
-
-    Returns:
-        Normalised lowercase value or ``None``.
-
-    Raises:
-        typer.BadParameter: If ``value`` 不在允许的集合内。
-    """
+    """校验 CLI 选项取值是否合法。"""
 
     if value is None:
         return None
     normalised = value.lower()
     if normalised not in valid:
         raise typer.BadParameter(
-            f"Unsupported {label}: {value}", param_hint=option_name
+            f"Unsupported {label}: {value} / 不支持的{label}: {value}",
+            param_hint=option_name,
         )
     return normalised
 
@@ -56,17 +45,7 @@ def _spec_from_prompt(
     rhythm_density: Optional[str],
     harmony_level: Optional[str],
 ) -> ProjectSpec:
-    """Parse the prompt and apply CLI overrides to create a :class:`ProjectSpec`.
-
-    Args:
-        prompt: Natural language description provided by the user.
-        motif_style: Optional motif style override from CLI flags.
-        rhythm_density: Optional rhythm density override.
-        harmony_level: Optional harmony complexity override.
-
-    Returns:
-        Validated :class:`ProjectSpec` with overrides applied.
-    """
+    """结合 Prompt 解析结果与 CLI 覆盖项生成 ProjectSpec。"""
 
     meta = parse_natural_prompt(prompt)
     if motif_style:
@@ -83,11 +62,7 @@ def _spec_from_prompt(
 
 
 def _echo_render_result(result: RenderResult) -> None:
-    """Print a concise summary of render artefacts.
-
-    Args:
-        result: Render outcome returned by :func:`motifmaker.render.render_project`.
-    """
+    """在控制台打印渲染成果，附带分轨统计。"""
 
     typer.echo(f"Specification saved to: {result['spec']}")
     typer.echo(f"Section summary saved to: {result['summary']}")
@@ -95,21 +70,19 @@ def _echo_render_result(result: RenderResult) -> None:
         typer.echo(f"MIDI file saved to: {result['midi']}")
     else:
         typer.echo("MIDI rendering skipped (use --emit-midi to enable).")
+    for track in result.get("track_stats", []):
+        typer.echo(
+            f"Track {track['name']}: {track['notes']} notes / {track['duration_sec']}s"
+        )
 
 
 @app.callback()
 def main(
     ctx: typer.Context,
-    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable INFO logging"),
-    debug: bool = typer.Option(False, "--debug", help="Enable DEBUG logging"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="启用 INFO 日志"),
+    debug: bool = typer.Option(False, "--debug", help="启用 DEBUG 日志"),
 ) -> None:
-    """Configure logging switches shared by all commands.
-
-    Args:
-        ctx: Typer context used to stash the log level.
-        verbose: Flag enabling INFO level logging.
-        debug: Flag enabling DEBUG level logging (takes precedence over verbose).
-    """
+    """配置 CLI 全局日志等级。"""
 
     level = logging.DEBUG if debug else logging.INFO if verbose else logging.WARNING
     configure_logging(level)
@@ -119,36 +92,27 @@ def main(
 
 @app.command("init-from-prompt")
 def init_from_prompt(
-    prompt: str = typer.Argument(..., help="Natural language description of the piece"),
-    out: Path = typer.Option(..., help="Output directory"),
+    prompt: str = typer.Argument(..., help="自然语言描述"),
+    out: Path = typer.Option(..., help="输出目录"),
     motif_style: Optional[str] = typer.Option(
         None,
-        help="Motif style template (ascending_arc|wavering|zigzag)",
+        help="动机风格模板 (ascending_arc|wavering|zigzag)",
     ),
     rhythm_density: Optional[str] = typer.Option(
         None,
-        help="Rhythm density control (low|medium|high)",
+        help="节奏密度 (low|medium|high)",
     ),
     harmony_level: Optional[str] = typer.Option(
         None,
-        help="Harmony complexity (basic|colorful)",
+        help="和声复杂度 (basic|colorful)",
     ),
     emit_midi: bool = typer.Option(
         False,
         "--emit-midi/--no-emit-midi",
-        help="Write a MIDI file alongside textual outputs",
+        help="是否生成 MIDI 文件",
     ),
 ) -> None:
-    """Generate a project from a natural language prompt.
-
-    Args:
-        prompt: Natural language description of the piece.
-        out: Directory to write textual outputs.
-        motif_style: Optional motif style override.
-        rhythm_density: Optional rhythm density override.
-        harmony_level: Optional harmony level override.
-        emit_midi: Whether to produce a MIDI file.
-    """
+    """从 Prompt 初始化工程规格并渲染。"""
 
     try:
         motif_style = _validate_choice(
@@ -164,30 +128,24 @@ def init_from_prompt(
         output_dir = ensure_directory(out)
         result = render_project(spec, output_dir, emit_midi=emit_midi)
         _echo_render_result(result)
-    except Exception as exc:  # pragma: no cover - error path
-        typer.echo(f"Error: {exc}")
+    except Exception as exc:  # pragma: no cover - 错误路径
+        typer.echo(f"错误: {exc}")
         raise typer.Exit(code=1)
 
 
 @app.command("render")
 def render_from_spec(
     spec_path: Path = typer.Option(
-        ..., exists=True, readable=True, help="Specification JSON"
+        ..., exists=True, readable=True, help="ProjectSpec JSON 路径"
     ),
-    out: Path = typer.Option(..., help="Output directory"),
+    out: Path = typer.Option(..., help="输出目录"),
     emit_midi: bool = typer.Option(
         False,
         "--emit-midi/--no-emit-midi",
-        help="Write a MIDI file alongside textual outputs",
+        help="是否生成 MIDI 文件",
     ),
 ) -> None:
-    """Render from an existing project specification JSON file.
-
-    Args:
-        spec_path: Path to the existing specification JSON.
-        out: Output directory for textual artefacts.
-        emit_midi: Whether to produce a MIDI file.
-    """
+    """从现有规格 JSON 渲染文本与 MIDI。"""
 
     try:
         spec_data = ProjectSpec.model_validate_json(
@@ -196,53 +154,94 @@ def render_from_spec(
         output_dir = ensure_directory(out)
         result = render_project(spec_data, output_dir, emit_midi=emit_midi)
         _echo_render_result(result)
-    except Exception as exc:  # pragma: no cover - error path
-        typer.echo(f"Error: {exc}")
+    except Exception as exc:  # pragma: no cover - 错误路径
+        typer.echo(f"错误: {exc}")
         raise typer.Exit(code=1)
 
 
-@app.command("regenerate-section")
-def regenerate_section_cmd(
-    spec: Path = typer.Option(
-        ..., exists=True, readable=True, help="Path to spec.json"
+@app.command("regen-section")
+def regen_section_cli(
+    spec_path: Path = typer.Option(
+        ..., exists=True, readable=True, help="原始 ProjectSpec JSON"
     ),
-    section: str = typer.Option(..., help="Section label to regenerate (e.g. B)"),
-    out: Path = typer.Option(..., help="Output directory for updated files"),
+    section_index: int = typer.Option(..., help="需要再生的段落索引 (0 开始)"),
+    keep_motif: bool = typer.Option(
+        True,
+        "--keep-motif/--switch-motif",
+        help="是否保留当前段落的动机标签",
+    ),
+    out: Path = typer.Option(..., help="渲染输出目录"),
+    emit_midi: bool = typer.Option(
+        True,
+        "--emit-midi/--no-emit-midi",
+        help="局部再生时是否生成 MIDI",
+    ),
 ) -> None:
-    """Regenerate a single section and refresh textual artefacts.
-
-    Args:
-        spec: Path to ``spec.json`` created by an earlier run.
-        section: Section label that should be regenerated.
-        out: Directory where the refreshed outputs should be stored.
-    """
+    """仅再生指定段落并渲染，示例: motifmaker regen-section --spec spec.json --section-index 2."""
 
     try:
-        project = ProjectSpec.model_validate_json(spec.read_text(encoding="utf-8"))
-        updated_spec, summaries = regenerate_section(project, section)
-        output_dir = ensure_directory(out)
-        spec_path = output_dir / "spec.json"
-        summary_path = output_dir / "summary.txt"
-        spec_path.write_text(
-            json.dumps(
-                updated_spec.model_dump(mode="json"), ensure_ascii=False, indent=2
-            ),
-            encoding="utf-8",
+        spec_data = ProjectSpec.model_validate_json(
+            spec_path.read_text(encoding="utf-8")
         )
-        summary_lines = []
-        for name, summary in summaries.items():
-            chord_summary = ", ".join(summary.get("chords", [])) or "(no harmony)"
-            regen_count = summary.get("regeneration_count", 0)
-            summary_lines.append(
-                f"Section {name} uses motif '{summary.get('motif_label')}' with {summary.get('note_count')} notes and chords: {chord_summary} (regenerated {regen_count} times)"
-            )
-        summary_path.write_text("\n".join(summary_lines), encoding="utf-8")
-        typer.echo(f"Updated spec saved to: {spec_path}")
-        typer.echo(f"Summary refreshed at: {summary_path}")
-    except Exception as exc:  # pragma: no cover - error path
-        typer.echo(f"Error: {exc}")
+        if section_index < 0 or section_index >= len(spec_data.form):
+            raise typer.BadParameter("段落索引越界", param_hint="--section-index")
+        section_name = spec_data.form[section_index].section
+        updated_spec, _ = regenerate_section(
+            spec_data, section_name, keep_motif=keep_motif
+        )
+        output_dir = ensure_directory(out)
+        result = render_project(updated_spec, output_dir, emit_midi=emit_midi)
+        _echo_render_result(result)
+    except typer.BadParameter:
+        raise
+    except Exception as exc:  # pragma: no cover - 错误路径
+        typer.echo(f"局部再生失败: {exc}")
         raise typer.Exit(code=1)
 
 
-if __name__ == "__main__":
-    app()
+@app.command("save-project")
+def save_project_cli(
+    spec_path: Path = typer.Option(
+        ..., exists=True, readable=True, help="ProjectSpec JSON 路径"
+    ),
+    name: str = typer.Option(..., help="保存的工程名称"),
+) -> None:
+    """保存当前工程规格，示例: motifmaker save-project --spec spec.json --name city_night_v1."""
+
+    try:
+        spec_data = ProjectSpec.model_validate_json(
+            spec_path.read_text(encoding="utf-8")
+        )
+        path = save_project_json(spec_data, name)
+        typer.echo(f"Project saved to: {path}")
+    except Exception as exc:  # pragma: no cover - 错误路径
+        typer.echo(f"保存失败: {exc}")
+        raise typer.Exit(code=1)
+
+
+@app.command("load-project")
+def load_project_cli(
+    name: str = typer.Option(..., help="保存时使用的工程名称"),
+    out: Path = typer.Option(..., help="渲染输出目录"),
+    emit_midi: bool = typer.Option(
+        False,
+        "--emit-midi/--no-emit-midi",
+        help="载入后是否生成 MIDI",
+    ),
+) -> None:
+    """载入已保存的工程并渲染，示例: motifmaker load-project --name city_night_v1 --out outputs/from_saved."""
+
+    try:
+        spec = load_project_json(name)
+        output_dir = ensure_directory(out)
+        result = render_project(spec, output_dir, emit_midi=emit_midi)
+        _echo_render_result(result)
+    except FileNotFoundError as exc:
+        typer.echo(f"未找到工程: {exc}")
+        raise typer.Exit(code=1)
+    except Exception as exc:  # pragma: no cover - 错误路径
+        typer.echo(f"载入失败: {exc}")
+        raise typer.Exit(code=1)
+
+
+__all__ = ["app"]

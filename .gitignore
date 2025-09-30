@@ -121,3 +121,10 @@ compiled/
 # Generated project outputs
 /outputs/
 
+# Front-end build artefacts
+/web/node_modules/
+/web/dist/
+
+# Persisted project snapshots
+/projects/
+

@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "useDefineForClassFields": true,
+    "module": "ESNext",
+    "moduleResolution": "Node",
+    "allowJs": false,
+    "jsx": "react-jsx",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": ["src"],
+  "references": [{ "path": "./tsconfig.node.json" }]
+}
