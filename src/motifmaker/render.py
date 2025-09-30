@@ -1,4 +1,8 @@
-"""Rendering utilities for combining melodic layers into textual summaries."""
+"""渲染工具模块，负责将各层音乐素材组合为文本与 MIDI 输出。
+
+英文原描述保留以兼容既有引用，同时补充中文说明，帮助读者理解渲染管线：
+动机 → 曲式草图 → 和声事件 → 各分轨渲染 → 统计与文件输出。
+"""
 
 from __future__ import annotations
 
@@ -21,13 +25,15 @@ logger = logging.getLogger(__name__)
 
 
 class RenderResult(TypedDict):
-    """Typed dictionary describing the artefacts created by :func:`render_project`."""
+    """渲染产物描述字典，新增分轨统计字段以便前端展示。"""
 
     output_dir: str
     spec: str
     summary: str
     midi: str | None
     sections: Dict[str, Dict[str, object]]
+    track_stats: List[Dict[str, object]]
+    project_spec: ProjectSpec
 
 
 @dataclass
@@ -108,7 +114,11 @@ def _collect_sections(
         }
         motifs[label] = generate_motif(motif_params)
     sketches = expand_form(spec, motifs)
-    harmony_map = generate_harmony(spec, sketches)
+    harmony_map = generate_harmony(
+        spec,
+        sketches,
+        use_secondary_dominant=bool(getattr(spec, "use_secondary_dominant", False)),
+    )
     return motifs, sketches, harmony_map
 
 
@@ -283,26 +293,110 @@ def _write_summary_file(
     summary_path.write_text("\n".join(lines), encoding="utf-8")
 
 
+def _calculate_track_stats(
+    sketches: List[SectionSketch],
+    harmony_map: Dict[str, List[HarmonyEvent]],
+    tempo: float,
+    active_tracks: List[str],
+) -> List[Dict[str, object]]:
+    """根据分轨选择计算音符数量与时长统计。"""
+
+    stats: List[Dict[str, object]] = []
+    total_beats = sum(
+        sum(note.duration_beats for note in sketch.notes) for sketch in sketches
+    )
+
+    if "melody" in active_tracks:
+        # 旋律轨简单统计所有音符数量，时长对应曲式总时长。
+        note_count = sum(len(sketch.notes) for sketch in sketches)
+        stats.append(
+            {
+                "name": "melody",
+                "notes": note_count,
+                "duration_sec": round(beats_to_seconds(total_beats, tempo), 3),
+            }
+        )
+
+    if "harmony" in active_tracks:
+        # 和声轨按照事件展开，累积所有分解音数量与结束时间。
+        note_count = 0
+        beat_cursor = 0.0
+        last_end = 0.0
+        for sketch in sketches:
+            for event in harmony_map.get(sketch.name, []):
+                note_count += len(event.pitches)
+                last_end = max(
+                    last_end, beat_cursor + event.start_beat + event.duration_beats
+                )
+            beat_cursor += sum(note.duration_beats for note in sketch.notes)
+        stats.append(
+            {
+                "name": "harmony",
+                "notes": note_count,
+                "duration_sec": round(beats_to_seconds(last_end, tempo), 3),
+            }
+        )
+
+    if "bass" in active_tracks:
+        # 贝斯轨与和声事件一一对应，使用属音 pedal 的音高。
+        event_count = 0
+        beat_cursor = 0.0
+        last_end = 0.0
+        for sketch in sketches:
+            for event in harmony_map.get(sketch.name, []):
+                event_count += 1
+                last_end = max(
+                    last_end, beat_cursor + event.start_beat + event.duration_beats
+                )
+            beat_cursor += sum(note.duration_beats for note in sketch.notes)
+        stats.append(
+            {
+                "name": "bass",
+                "notes": event_count,
+                "duration_sec": round(beats_to_seconds(last_end, tempo), 3),
+            }
+        )
+
+    if "percussion" in active_tracks:
+        # 打击轨采用简单的 4 分音 hi-hat，数量等于节拍数，时长覆盖整首曲子。
+        stats.append(
+            {
+                "name": "percussion",
+                "notes": int(total_beats),
+                "duration_sec": round(beats_to_seconds(total_beats, tempo), 3),
+            }
+        )
+
+    return stats
+
+
 def render_project(
-    project_spec: ProjectSpec, output_dir: str | Path, emit_midi: bool = False
+    project_spec: ProjectSpec,
+    output_dir: str | Path,
+    emit_midi: bool = False,
+    tracks_to_export: List[str] | None = None,
 ) -> RenderResult:
-    """Render the project into textual artefacts and optionally MIDI.
-
-    Args:
-        project_spec: Fully populated :class:`ProjectSpec` describing the work.
-        output_dir: Directory where artefacts should be placed.
-        emit_midi: Whether to serialise a ``.mid`` file. Defaults to ``False`` to
-            honour the text-only behaviour required in continuous integration.
-
-    Returns:
-        A :class:`RenderResult` describing the created artefacts.
-    """
+    """渲染项目，支持选择性导出分轨并返回详细统计信息。"""
 
     output_path = ensure_directory(output_dir)
-    logger.info("Rendering project into %s (emit_midi=%s)", output_path, emit_midi)
+    logger.info(
+        "Rendering project into %s (emit_midi=%s, tracks=%s)",
+        output_path,
+        emit_midi,
+        tracks_to_export,
+    )
 
     _, sketches, harmony_map = _collect_sections(project_spec)
     summaries = _build_section_summaries(project_spec, sketches, harmony_map)
+
+    # 默认导出四条分轨，允许调用方通过列表精细控制。
+    available_tracks = ["melody", "harmony", "bass", "percussion"]
+    active_tracks = (
+        [track for track in tracks_to_export or available_tracks if track in available_tracks]
+        or []
+    )
+    tempo = float(project_spec.tempo_bpm)
+    track_stats = _calculate_track_stats(sketches, harmony_map, tempo, active_tracks)
 
     existing_counts = project_spec.generated_sections or {}
     serialised_summaries: Dict[str, Dict[str, object]] = {}
@@ -328,29 +422,34 @@ def render_project(
     _write_summary_file(summary_path, summaries.values())
 
     midi_path: Path | None = None
-    if emit_midi:
+    if emit_midi and active_tracks:
         pretty_midi = _require_pretty_midi()
-        tempo = float(project_spec.tempo_bpm)
         instrumentation = project_spec.instrumentation or ["piano"]
         midi = pretty_midi.PrettyMIDI()
         primary_program = program_for_instrument(instrumentation[0])
-        midi.instruments.append(_render_melody(sketches, tempo, primary_program))
-        harmony_program = (
-            program_for_instrument(instrumentation[1])
-            if len(instrumentation) > 1
-            else 48
-        )
-        midi.instruments.append(
-            _render_harmony(sketches, harmony_map, tempo, harmony_program)
-        )
-        midi.instruments.append(_render_bass(sketches, harmony_map, tempo))
-        total_beats = sum(
-            sum(note.duration_beats for note in sketch.notes) for sketch in sketches
-        )
-        midi.instruments.append(_render_percussion(total_beats, tempo))
+        if "melody" in active_tracks:
+            midi.instruments.append(_render_melody(sketches, tempo, primary_program))
+        if "harmony" in active_tracks:
+            harmony_program = (
+                program_for_instrument(instrumentation[1])
+                if len(instrumentation) > 1
+                else 48
+            )
+            midi.instruments.append(
+                _render_harmony(sketches, harmony_map, tempo, harmony_program)
+            )
+        if "bass" in active_tracks:
+            midi.instruments.append(_render_bass(sketches, harmony_map, tempo))
+        if "percussion" in active_tracks:
+            total_beats = sum(
+                sum(note.duration_beats for note in sketch.notes) for sketch in sketches
+            )
+            midi.instruments.append(_render_percussion(total_beats, tempo))
         midi_path = output_path / "track.mid"
         midi.write(str(midi_path))
         logger.info("MIDI file written to %s", midi_path)
+    elif emit_midi:
+        logger.info("MIDI export requested但未选择任何分轨，跳过写入。")
 
     return RenderResult(
         output_dir=str(output_path),
@@ -358,36 +457,47 @@ def render_project(
         summary=str(summary_path),
         midi=str(midi_path) if midi_path else None,
         sections=serialised_summaries,
+        track_stats=track_stats,
+        project_spec=updated_spec,
     )
 
 
 def regenerate_section(
-    project_spec: ProjectSpec, section_name: str
+    project_spec: ProjectSpec,
+    section_name: str,
+    *,
+    keep_motif: bool = True,
 ) -> tuple[ProjectSpec, Dict[str, Dict[str, object]]]:
-    """Regenerate a single section while preserving others.
+    """CLI 辅助函数：局部再生成并更新段落统计。"""
 
-    Args:
-        project_spec: Existing project specification with (optional) cached summaries.
-        section_name: Identifier of the section to regenerate (e.g. ``"B"``).
+    form_sections = list(project_spec.form)
+    if not keep_motif:
+        motif_specs = {label: dict(data) for label, data in project_spec.motif_specs.items()}
+        for idx, section in enumerate(form_sections):
+            if section.section != section_name:
+                continue
+            current_label = section.motif_label
+            alternative = None
+            for label, data in motif_specs.items():
+                if label == current_label or data.get("_frozen"):
+                    continue
+                alternative = label
+                break
+            if alternative:
+                form_sections[idx] = section.model_copy(update={"motif_label": alternative})
+                break
+    working_spec = project_spec.model_copy(update={"form": form_sections})
 
-    Returns:
-        A tuple containing the updated :class:`ProjectSpec` and the combined
-        section summaries (including unchanged sections).
-
-    Raises:
-        ValueError: If the section does not exist in the specification.
-    """
-
-    existing = dict(project_spec.generated_sections or {})
-    _, sketches, harmony_map = _collect_sections(project_spec)
-    summaries = _build_section_summaries(project_spec, sketches, harmony_map)
+    existing = dict(working_spec.generated_sections or {})
+    _, sketches, harmony_map = _collect_sections(working_spec)
+    summaries = _build_section_summaries(working_spec, sketches, harmony_map)
     if section_name not in summaries:
         raise ValueError(f"Unknown section '{section_name}' in specification")
     new_summary = summaries[section_name].as_dict()
     previous_count = int(existing.get(section_name, {}).get("regeneration_count", 0))
     new_summary["regeneration_count"] = previous_count + 1
     existing[section_name] = new_summary
-    updated_spec = project_spec.model_copy(update={"generated_sections": existing})
+    updated_spec = working_spec.model_copy(update={"generated_sections": existing})
     return updated_spec, existing
 
 

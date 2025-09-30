@@ -1,152 +1,91 @@
 # Motifmaker
 
-Motifmaker 是一个面向实验创作的分层式音乐生成原型，通过“感觉 → 骨架 → 动机 → 结构 → 和声 → 渲染”的流程，将自然语言 Prompt 转化为可追踪的音乐草图。系统默认仅生成 JSON 与文本摘要，确保在研究与测试阶段不会产生 MIDI 或音频等二进制文件（除非显式要求）。
+Motifmaker 是一个分层式音乐生成原型，按照“动机 → 旋律 → 和声 → 渲染”的流水线，将自然语言 Prompt 解析成结构化的项目规格并输出文本、JSON 与可选 MIDI。
 
-## 架构总览
+## 系统架构说明
+- Prompt 解析层：`parsing.py` 负责提取情绪、速度、拍号与曲式线索，输出 `ProjectSpec` 所需的元数据。
+- 骨架 JSON：`schema.py` 依据解析结果构造项目骨架，定义段落（Form）、动机字典、配器等字段。
+- 动机层：`motif.py` 根据轮廓模板与节奏密度生成核心动机素材。
+- 曲式展开：`form.py` 将动机映射到 A/B/Bridge 等段落，生成带节奏信息的草图。
+- 和声层：`harmony.py` 结合调式与情绪，生成基础/色彩和声，并支持自然小调的属功能与二级属。
+- 渲染层：`render.py` 输出 JSON、文字摘要及可选分轨 MIDI，并提供局部再生统计。
+- Web UI：Vite + React + TailwindCSS + Shoelace + Tone.js 作为可视化控制台，通过 FastAPI 与上述层级交互。
 
-```
-感受 Prompt ──► Prompt Parser ──► 骨架 JSON ──► Motif Engine ──► Form Expander ──► Harmony Engine ──► Renderer
-      (parsing.py)        (schema.py)        (motif.py)          (form.py)           (harmony.py)          (render.py)
-```
+## 当前功能（本次迭代）
+- 自然语言生成与再生：支持全量生成、局部再生、动机冻结。
+- 分轨导出：可选择旋律/和声/贝斯/打击任意子集，并返回每条轨道的音符数量与时长。
+- 工程持久化：CLI/API 可保存与载入 `ProjectSpec`，便于多轮迭代。
+- Web UI：提供 Prompt 输入、参数旋钮、段落表格、局部再生按钮、在线播放（Tone.js）与 MIDI 下载。
+- CLI 增强：新增 `regen-section`、`save-project`、`load-project` 三个命令，均附中文帮助与错误提示。
+- 解析增强：覆盖 10+ 情绪场景预设，支持显式 BPM/拍号/曲式模板解析，自动识别“二级属”等关键词。
 
-ASCII 图中的每一层均对应 `src/motifmaker/` 下的模块，详细说明请参阅 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。数据沿箭头依次流动：解析自然语言、构造 `ProjectSpec`、生成动机、展开段落、匹配和声，最后输出文本摘要与 JSON 规格（MIDI 需显式开启）。
-
-## 功能特性
-- **动机风格模板**：支持 `ascending_arc`、`wavering`、`zigzag` 三种轮廓，可通过 CLI/API 选择或由 Prompt 自动推断。
-- **节奏密度控制**：`low`、`medium`、`high` 三档密度，覆盖克制、均衡与紧张场景。
-- **和声复杂度档位**：`basic` 提供基础三和弦，`colorful` 引入七和弦与小调借用音。
-- **局部再生**：`motifmaker regenerate-section` 可在不动原始 Prompt 的情况下重算指定段落，并记录再生次数。
-- **日志开关**：CLI 提供 `--verbose` 与 `--debug`，API 端自动记录 INFO 级别事件，便于调试。
-
-## 安装与环境
-1. 克隆仓库并创建虚拟环境：
+## 使用步骤
+### Python 端
+1. 安装依赖并运行测试：
    ```bash
    python -m venv .venv
-   source .venv/bin/activate  # Windows 使用 .venv\Scripts\activate
-   pip install -r requirements-dev.txt
-   ```
-2. 安装预提交钩子：`pre-commit install`
-3. 推荐命令：
-   ```bash
-   black --check .
-   isort --check-only .
-   mypy src
+   source .venv/bin/activate  # Windows 使用 .venv\\Scripts\\activate
+   pip install -r requirements.txt
    pytest -q
    ```
+2. 启动 API 服务：
+   ```bash
+   uvicorn motifmaker.api:app --reload
+   ```
+3. 使用 CLI 生成或再生：
+   ```bash
+   motifmaker init-from-prompt "城市夜景 Lo-Fi" --out outputs/demo --emit-midi
+   motifmaker regen-section --spec outputs/demo/spec.json --section-index 1 --keep-motif true --out outputs/demo_regen
+   motifmaker save-project --spec outputs/demo/spec.json --name city_night_v1
+   motifmaker load-project --name city_night_v1 --out outputs/from_saved
+   ```
 
-## 快速开始
-### 使用 CLI 生成文本草图
-```bash
-motifmaker init-from-prompt "城市夜景、温暖而克制、B 段最高张力、现代古典+电子" \
-  --out outputs/demo_text_only --no-emit-midi
-cat outputs/demo_text_only/spec.json
-cat outputs/demo_text_only/summary.txt
-```
-输出目录中仅包含 `spec.json` 与 `summary.txt`，未生成任何 `.mid` 文件。
+### Web 端
+1. 启动前端开发服务器：
+   ```bash
+   cd web
+   npm install
+   npm run dev
+   ```
+2. 浏览器访问 http://localhost:5173，默认后端为 http://127.0.0.1:8000。
+3. 在 UI 中输入 Prompt，调整参数，点击“一键生成骨架”即可查看 JSON 预览、试听 MIDI、下载文件。
+4. 尝试在段落表格中编辑 A/B 段的小节数与张力，点击“局部再生成”观察更新结果；使用“冻结动机”按钮保持特定动机不被替换。
 
-### 局部再生
-```bash
-motifmaker regenerate-section --spec outputs/demo_text_only/spec.json \
-  --section B --out outputs/demo_text_only
-cat outputs/demo_text_only/summary.txt
-```
-再生后的段落会更新 `regeneration_count` 字段，其他段保持不变。
+## 参数与交互大纲
+- 情绪旋钮：滑块映射至和声复杂度（柔和/色彩），对应 `harmony_level`。
+- 乐理旋钮：下拉菜单控制调性、调式、速度(BPM)与拍号，实时更新 `ProjectSpec`。
+- 制作旋钮：复选框切换配器厚度（钢琴、弦乐、合成器等），同时可选择分轨导出集合。
+- 曲式编辑表：表格支持修改每段的 `bars` 与 `tension`，并提供“局部再生成”“更换动机再生”“冻结动机”按钮。
+- 局部再生：调用 `/regenerate-section`，可选择是否保留原动机标签。
+- 动机冻结：调用 `/freeze-motif` 将指定标签的 `_frozen` 标记设为 `true`。
 
-### 启动 API 并调用
-```bash
-uvicorn motifmaker.api:app --reload
-```
-在另一终端使用：
-```bash
-curl -s -X POST http://127.0.0.1:8000/generate \
-  -H "Content-Type: application/json" \
-  -d '{"prompt":"雨后城市夜景，慢中速，A-B-Bridge-A′，现代古典融合电子","options":{"rhythm_density":"medium","harmony_level":"basic"}}'
-```
-响应返回输出目录与段落摘要，`midi` 字段默认为 `null`。
+## 输出与文件结构
+- `outputs/*.mid`：可选生成的 MIDI，命名如 `outputs/prompt_xxxx/track.mid`。
+- `outputs/*.json`：渲染后的项目规格（带再生计数）。
+- `outputs/summary.txt`：按段落生成的文字摘要。
+- `projects/*.json`：通过 `save-project` 或 API `/save-project` 保存的工程快照。
+- Web UI 产物存放于 `web/`，构建产出的 `web/dist/` 已加入 `.gitignore`。
 
-## 参数说明
-### CLI (`motifmaker init-from-prompt`)
-| 参数 | 默认值 | 说明 |
-| ---- | ------ | ---- |
-| `prompt` | 必填 | 自然语言描述 |
-| `--out` | 必填 | 输出目录，自动创建 |
-| `--motif-style` | 自动推断 | `ascending_arc` / `wavering` / `zigzag` |
-| `--rhythm-density` | 自动推断 | `low` / `medium` / `high` |
-| `--harmony-level` | 自动推断 | `basic` / `colorful` |
-| `--emit-midi/--no-emit-midi` | `--no-emit-midi` | 是否写出 MIDI |
-| `--verbose` | 关闭 | INFO 日志 |
-| `--debug` | 关闭 | DEBUG 日志 |
+## 未来蓝图（Roadmap）
+- 高级和声：引入借用和弦、完善二级属体系，支持更多调式转换案例。
+- 变奏算子：扩展节奏置换、序列推进、力度与时值人性化处理。
+- 音色库：建立 GM 到多音源的映射，并与 Ableton/Logic 等 DAW 模板打通。
+- 多模型支持：允许接入外部旋律/和声生成模型，构建多风格模板库。
 
-`motifmaker render` 与 `motifmaker regenerate-section` 共享 `--emit-midi` 及日志选项，详见 `motifmaker --help`。
+## 常见问题（FAQ）
+- **生成结果不悦耳怎么办？** 降低节奏密度、提高调性稳定度、减少张力峰值即可获得更平滑的编排。
+- **浏览器播放无声？** 某些浏览器需要用户点击页面后才允许播放音频，请先与页面交互后再点击播放按钮。
+- **如何仅导出旋律轨？** 在参数面板勾选需要的分轨即可，渲染结果的 `track_stats` 会同步更新。
+- **下载按钮提示 404？** 请确认后端服务仍在运行，并检查生成的 `outputs/` 目录中文件是否仍存在；必要时重新触发一次渲染以刷新文件路径。
 
-### API 选项
-- `GenerationOptions.motif_style`：同 CLI。
-- `GenerationOptions.rhythm_density`：同 CLI。
-- `GenerationOptions.harmony_level`：同 CLI。
-- `GenerationOptions.emit_midi`：默认 `false`。
-- `/render` 端点可设置 `emit_midi` 来覆写已有规格。
+## 许可与致谢
+- 许可证：MIT（详见 [LICENSE](LICENSE)）。
+- 致谢：项目使用了 FastAPI、Typer、pretty_midi、TailwindCSS、Shoelace、Tone.js、@tonejs/midi 等优秀的开源组件。
 
-## 开发指南
-- 代码结构参见 `src/motifmaker/`，主要模块与职责：
-  - `parsing.py`：Prompt 解析与关键字映射。
-  - `schema.py`：`ProjectSpec` 定义与默认构造。
-  - `motif.py`：动机生成、节奏模板。
-  - `form.py`：曲式展开与变奏算子。
-  - `harmony.py`：和声进程与复杂度切换。
-  - `render.py`：文本摘要、再生计数与可选 MIDI。
-  - `cli.py` / `api.py`：对外接口与日志配置。
-- 新增动机或和声算子时：
-  1. 在对应模块实现并添加详尽 docstring 与日志。
-  2. 更新 [docs/ALGORITHMS.md](docs/ALGORITHMS.md) 记录规则与伪代码。
-  3. 编写单元测试与必要的端到端测试。
-- 日志建议使用 `logging.getLogger(__name__)`，INFO 描述阶段摘要，DEBUG 输出细节。
+## 需要你来做
+- 如要部署线上 Demo：准备一个静态托管平台（Vercel/Netlify 等）及后端部署位置（Railway/Render/自有 VPS）。
+- 如要接入外部 AI 模型：请在本地 `.env` 中配置 API Key，避免提交到仓库。
+- 如要启用 HTTPS 或自定义域名：准备域名与证书，或使用托管平台的自动证书功能。
+- 如需持久云存储：提供 S3/OSS 等凭据（同样建议放置在 `.env`）。
+- 本地开发需安装 Node.js ≥ 18 用于前端构建与调试。
 
-## 故障排查
-| 问题 | 可能原因 | 解决方案 |
-| ---- | -------- | -------- |
-| 安装 `pretty_midi` 失败 | 缺少编译工具或依赖 | 使用 `pip install -r requirements-dev.txt`，必要时安装 `libfluidsynth`/`libasound2-dev` |
-| 运行 CLI 生成了 `.mid` | 未显式关闭 | 使用 `--no-emit-midi`（默认值），或删除已生成文件后重试 |
-| mypy 报错 | 缺少类型注解或 TypedDict | 检查新增函数，确保返回类型与字典键定义清晰 |
-| pytest 找不到模块 | `src` 未在路径上 | `tests/conftest.py` 已加入路径，如新增包请补充 `__init__.py` |
-| Windows / macOS 行结束差异 | Git 配置不一致 | 仓库提供 `.editorconfig` 与 `.gitattributes`，请保持 LF 行尾 |
-
-## 路线图
-- 扩展曲式模板（Rondo、Through-Composed 等）。
-- 引入风格迁移与语义解析模型，提升 Prompt 理解力。
-- 加强再生机制，支持段落级参数微调与自动差分。
-- 探索与 DAW 的桥接方案，提供实时导出能力。
-
-## 许可证与致谢
-- 许可证：MIT（见 [LICENSE](LICENSE)）。
-- 致谢：感谢 pretty_midi、music21、mido 等开源项目提供的基础设施。
-
-## 验证步骤
-在提交前可使用以下命令快速验证，本列表同样用于持续集成检查：
-```bash
-# 1) 安装依赖
-python -m venv .venv
-source .venv/bin/activate  # Windows 使用 .venv\Scripts\activate
-pip install -r requirements-dev.txt
-pre-commit install
-
-# 2) 代码质量检查
-black --check .
-isort --check-only .
-mypy src
-
-# 3) 运行测试
-pytest -q
-
-# 4) 从自然语言 Prompt 生成：只产生 JSON 与文本日志
-motifmaker init-from-prompt "城市夜景、温暖而克制、B 段最高张力、现代古典+电子" --out outputs/demo_text_only
-
-# 5) 局部再生：只更新 JSON 与文本描述
-motifmaker regenerate-section --spec outputs/demo_text_only/spec.json --section B --out outputs/demo_text_only
-
-# 6) 启动 API 并使用 cURL
-uvicorn motifmaker.api:app --reload
-# 另一个终端：
-curl -s -X POST http://127.0.0.1:8000/generate -H "Content-Type: application/json" \
-  -d '{"prompt":"雨后城市夜景，慢中速，A-B-Bridge-A′，现代古典融合电子","options":{"rhythm_density":"medium","harmony_level":"basic"}}'
-```
-若任何命令产生二进制文件，请检查是否误启用 `--emit-midi` 或手动删除相关文件后再次执行。
