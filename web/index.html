@@ -4,10 +4,14 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Motifmaker Web UI</title>
-    <!-- 引入 Shoelace CDN，提供无障碍的 UI 组件 -->
-    <script type="module" src="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.15.1/cdn/shoelace.js"></script>
+    <!-- 通过 CDN 引入 Shoelace，原因：组件库体积轻量、采用 MIT 许可、内置无障碍语义，适合快速搭建控制面板 -->
+    <script
+      type="module"
+      src="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.15.1/cdn/shoelace.js"
+    ></script>
   </head>
   <body class="bg-slate-900 text-slate-100">
+    <!-- React 应用的挂载点，所有 UI 会在 #root 内由 Vite 注入 -->
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
