@@ -1,8 +1,8 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@tailwind base; /* 引入 Tailwind 的基础样式，重置浏览器默认样式。 */
+@tailwind components; /* 引入预设组件类，便于快速布局。 */
+@tailwind utilities; /* 引入工具类集合，用于组合式开发。 */
 
-/* 自定义主题色，便于与深色背景搭配。 */
+/* 深色主题设置：Tone.js 播放器在深色背景下更易对比。 */
 :root {
   color-scheme: dark;
 }

@@ -1,203 +1,168 @@
-import React, { useEffect, useState } from "react";
-import { GenerateOptions } from "../api";
+import React from "react";
+import clsx from "clsx";
+import { ParamOverrides, ProjectSpec } from "../api";
 
-interface ParamState {
-  key: string;
-  mode: string;
-  tempo_bpm: number;
-  meter: string;
-  instrumentation: string[];
+/**
+ * ParamsPanel 组件：展示节奏、调性、配器等参数的临时覆盖控件。
+ * 这些参数不会直接修改当前 ProjectSpec，而是在提交请求时由 App 合并，
+ * 这样可以保持前端灵活性，同时确保后端拥有最终解释权。
+ */
+export interface ParamsPanelProps {
+  projectSpec: ProjectSpec | null; // 当前后端下发的规格，可为空。
+  overrides: ParamOverrides; // 用户在前端调整的临时参数。
+  onOverridesChange: (next: ParamOverrides) => void; // 通知上层更新覆盖值。
 }
 
-interface ParamsPanelProps {
-  state: ParamState;
-  options: GenerateOptions;
-  selectedTracks: string[];
-  onStateChange: (updates: Partial<ParamState>) => void;
-  onOptionsChange: (updates: Partial<GenerateOptions>) => void;
-  onTracksChange: (tracks: string[]) => void;
-}
-
-const ALL_TRACKS = ["melody", "harmony", "bass", "percussion"];
-const ALL_INSTRUMENTS = [
+const INSTRUMENT_OPTIONS = [
   "piano",
   "strings",
-  "acoustic-guitar",
-  "synth-pad",
-  "brass",
-  "percussion",
+  "synth pad",
+  "drums",
+  "bass",
+  "woodwinds",
 ];
 
 const ParamsPanel: React.FC<ParamsPanelProps> = ({
-  state,
-  options,
-  selectedTracks,
-  onStateChange,
-  onOptionsChange,
-  onTracksChange,
+  projectSpec,
+  overrides,
+  onOverridesChange,
 }) => {
-  const [mood, setMood] = useState(60);
-
-  useEffect(() => {
-    // 当用户调整情绪滑块时映射到 harmony_level，50 以下视为 basic，以上为 colorful。
-    const harmony_level = mood < 50 ? "basic" : "colorful";
-    if (options.harmony_level !== harmony_level) {
-      onOptionsChange({ harmony_level });
-    }
-  }, [mood, onOptionsChange, options.harmony_level]);
-
-  const toggleTrack = (track: string) => {
-    const set = new Set(selectedTracks);
-    if (set.has(track)) {
-      set.delete(track);
-    } else {
-      set.add(track);
-    }
-    onTracksChange(Array.from(set));
+  // 帮助函数：生成新的覆盖对象，保持不可变数据结构。
+  const setOverride = <K extends keyof ParamOverrides>(key: K, value: ParamOverrides[K]) => {
+    onOverridesChange({
+      ...overrides,
+      [key]: value,
+    });
   };
 
-  const toggleInstrument = (instrument: string) => {
-    const set = new Set(state.instrumentation);
-    if (set.has(instrument)) {
-      set.delete(instrument);
-    } else {
-      set.add(instrument);
-    }
-    onStateChange({ instrumentation: Array.from(set) });
-  };
+  const effectiveTempo = overrides.tempo_bpm ?? projectSpec?.tempo_bpm ?? 100; // 展示值优先使用覆盖，其次是后端原值，最后兜底默认。
+  const effectiveMeter = overrides.meter ?? projectSpec?.meter ?? "4/4";
+  const effectiveKey = overrides.key ?? projectSpec?.key ?? "C";
+  const effectiveMode = overrides.mode ?? projectSpec?.mode ?? "major";
+  const effectiveInstrumentation = overrides.instrumentation ?? projectSpec?.instrumentation ?? ["piano"];
+  const useSecondaryDominant = overrides.harmony_options?.use_secondary_dominant ?? projectSpec?.harmony_options?.use_secondary_dominant ?? false;
 
   return (
-    <div className="space-y-4">
-      <div>
-        <label className="block text-xs font-semibold text-slate-300">情绪强度</label>
-        <input
-          type="range"
-          min={0}
-          max={100}
-          value={mood}
-          onChange={(event) => setMood(Number(event.target.value))}
-          className="w-full"
-        />
+    <section className="space-y-4 rounded-lg border border-slate-700 bg-slate-900/60 p-4 shadow-sm">
+      <header className="space-y-1">
+        <h2 className="text-sm font-semibold text-slate-200">参数覆盖</h2>
+        <p className="text-xs text-slate-400">
+          下方调节项只影响下一次请求的 payload，后端会在生成时合并这些覆盖值并进行合法性校验。
+        </p>
+      </header>
+
+      <div className="space-y-2">
+        <label className="text-xs font-medium text-slate-300">Tempo (BPM)</label>
+        <sl-slider
+          min={60}
+          max={140}
+          step={1}
+          value={effectiveTempo}
+          onSlChange={(event) => {
+            // Shoelace Slider 的 value 为字符串或数字，统一转为数字存储。
+            const target = event.target as HTMLInputElement;
+            setOverride("tempo_bpm", Number(target.value));
+          }}
+        ></sl-slider>
+        <span className="text-xs text-slate-400">当前：{effectiveTempo} BPM</span>
       </div>
-      <div className="grid grid-cols-2 gap-3 text-xs">
-        <label className="flex flex-col space-y-1">
-          <span>调性</span>
-          <select
-            className="rounded-md bg-slate-800 p-2"
-            value={state.key}
-            onChange={(event) => onStateChange({ key: event.target.value })}
+
+      <div className="grid gap-3 sm:grid-cols-2">
+        <label className="space-y-2 text-xs text-slate-300">
+          <span className="font-medium">拍号 (Meter)</span>
+          <sl-select
+            value={effectiveMeter}
+            onSlChange={(event) => {
+              const target = event.target as HTMLSelectElement;
+              setOverride("meter", target.value);
+            }}
           >
-            {["C", "D", "E", "F", "G", "A", "Bb", "Eb"].map((key) => (
-              <option key={key} value={key}>
-                {key}
-              </option>
-            ))}
-          </select>
+            <sl-option value="4/4">4/4</sl-option>
+            <sl-option value="3/4">3/4</sl-option>
+          </sl-select>
         </label>
-        <label className="flex flex-col space-y-1">
-          <span>调式</span>
-          <select
-            className="rounded-md bg-slate-800 p-2"
-            value={state.mode}
-            onChange={(event) => onStateChange({ mode: event.target.value })}
-          >
-            <option value="major">大调</option>
-            <option value="minor">小调</option>
-          </select>
-        </label>
-        <label className="flex flex-col space-y-1">
-          <span>速度 (BPM)</span>
-          <input
-            type="number"
-            className="rounded-md bg-slate-800 p-2"
-            value={state.tempo_bpm}
-            onChange={(event) =>
-              onStateChange({ tempo_bpm: Number(event.target.value) })
-            }
-          />
-        </label>
-        <label className="flex flex-col space-y-1">
-          <span>拍号</span>
-          <select
-            className="rounded-md bg-slate-800 p-2"
-            value={state.meter}
-            onChange={(event) => onStateChange({ meter: event.target.value })}
-          >
-            {["4/4", "3/4", "6/8"].map((meter) => (
-              <option key={meter} value={meter}>
-                {meter}
-              </option>
-            ))}
-          </select>
+
+        <label className="space-y-2 text-xs text-slate-300">
+          <span className="font-medium">调性 (Key / Mode)</span>
+          <div className="grid grid-cols-2 gap-2">
+            <sl-input
+              value={effectiveKey}
+              placeholder="C"
+              onSlChange={(event) => {
+                const target = event.target as HTMLInputElement;
+                setOverride("key", target.value.toUpperCase());
+              }}
+            ></sl-input>
+            <sl-select
+              value={effectiveMode}
+              onSlChange={(event) => {
+                const target = event.target as HTMLSelectElement;
+                setOverride("mode", target.value);
+              }}
+            >
+              <sl-option value="major">Major</sl-option>
+              <sl-option value="minor">Minor</sl-option>
+              <sl-option value="dorian">Dorian</sl-option>
+            </sl-select>
+          </div>
         </label>
       </div>
-      <div className="space-y-2 text-xs">
-        <span className="font-semibold">配器选择</span>
-        <div className="grid grid-cols-2 gap-2">
-          {ALL_INSTRUMENTS.map((instrument) => {
-            const checked = state.instrumentation.includes(instrument);
+
+      <div className="space-y-2">
+        <span className="text-xs font-medium text-slate-300">Instrumentation 配器选择</span>
+        <div className="flex flex-wrap gap-2">
+          {INSTRUMENT_OPTIONS.map((instrument) => {
+            const checked = effectiveInstrumentation.includes(instrument);
             return (
-              <label key={instrument} className="flex items-center space-x-2">
-                <input
-                  type="checkbox"
+              <label
+                key={instrument}
+                className={clsx(
+                  "flex items-center gap-2 rounded-full border px-3 py-1 text-xs",
+                  checked ? "border-cyan-400 bg-cyan-500/20" : "border-slate-700"
+                )}
+              >
+                <sl-checkbox
                   checked={checked}
-                  onChange={() => toggleInstrument(instrument)}
-                />
-                <span>{instrument}</span>
+                  onSlChange={(event) => {
+                    const target = event.target as HTMLInputElement;
+                    const next = new Set(effectiveInstrumentation);
+                    if (target.checked) {
+                      next.add(instrument);
+                    } else {
+                      next.delete(instrument);
+                    }
+                    setOverride("instrumentation", Array.from(next));
+                  }}
+                ></sl-checkbox>
+                {instrument}
               </label>
             );
           })}
         </div>
+        <p className="text-xs text-slate-400">
+          覆盖配器时仅调整提交给后端的列表，后端仍会根据实际可用音色进行裁剪或补全。
+        </p>
       </div>
-      <div className="space-y-2 text-xs">
-        <span className="font-semibold">导出分轨</span>
-        <div className="grid grid-cols-2 gap-2">
-          {ALL_TRACKS.map((track) => {
-            const checked = selectedTracks.includes(track);
-            return (
-              <label key={track} className="flex items-center space-x-2">
-                <input
-                  type="checkbox"
-                  checked={checked}
-                  onChange={() => toggleTrack(track)}
-                />
-                <span>{track}</span>
-              </label>
-            );
-          })}
-        </div>
+
+      <div className="rounded-md bg-slate-800/60 p-3 text-xs text-slate-300">
+        <label className="flex items-center gap-2">
+          <sl-switch
+            checked={useSecondaryDominant}
+            onSlChange={(event) => {
+              const target = event.target as HTMLInputElement;
+              setOverride("harmony_options", {
+                ...overrides.harmony_options,
+                use_secondary_dominant: target.checked,
+              });
+            }}
+          ></sl-switch>
+          启用二级属和声（useSecondaryDominant）
+        </label>
+        <p className="mt-2 text-[11px] text-slate-400">
+          说明：若开启该选项，后端会优先尝试在和声生成时插入二级属功能；若后端认为当前调性不适合，会自动忽略。
+        </p>
       </div>
-      <div className="space-y-2 text-xs">
-        <span className="font-semibold">动机风格</span>
-        <select
-          className="w-full rounded-md bg-slate-800 p-2"
-          value={options.motif_style ?? ""}
-          onChange={(event) =>
-            onOptionsChange({ motif_style: event.target.value || undefined })
-          }
-        >
-          <option value="">自动</option>
-          <option value="ascending_arc">上行回落</option>
-          <option value="wavering">波浪</option>
-          <option value="zigzag">曲折</option>
-        </select>
-      </div>
-      <div className="space-y-2 text-xs">
-        <span className="font-semibold">节奏密度</span>
-        <select
-          className="w-full rounded-md bg-slate-800 p-2"
-          value={options.rhythm_density ?? ""}
-          onChange={(event) =>
-            onOptionsChange({ rhythm_density: event.target.value || undefined })
-          }
-        >
-          <option value="">自动</option>
-          <option value="low">稀疏</option>
-          <option value="medium">适中</option>
-          <option value="high">紧凑</option>
-        </select>
-      </div>
-    </div>
+    </section>
   );
 };
 
