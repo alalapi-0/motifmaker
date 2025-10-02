@@ -1,92 +1,114 @@
 # Motifmaker
 
-Motifmaker 是一个分层式音乐生成原型，按照“动机 → 旋律 → 和声 → 渲染”的流水线，将自然语言 Prompt 解析成结构化的项目规格并输出文本、JSON 与可选 MIDI。
+## 1. 项目简介
+Motifmaker 是一个分层式音乐生成原型，支持从自然语言 Prompt → 骨架 JSON → 动机 → 段落展开 → 和声 → 渲染 → MIDI → Web UI 试听与下载的全流程。系统强调模块解耦，既适合研究实验，也能拓展成音乐创作工具。
 
-## 系统架构说明
-- Prompt 解析层：`parsing.py` 负责提取情绪、速度、拍号与曲式线索，输出 `ProjectSpec` 所需的元数据。
-- 骨架 JSON：`schema.py` 依据解析结果构造项目骨架，定义段落（Form）、动机字典、配器等字段。
-- 动机层：`motif.py` 根据轮廓模板与节奏密度生成核心动机素材。
-- 曲式展开：`form.py` 将动机映射到 A/B/Bridge 等段落，生成带节奏信息的草图。
-- 和声层：`harmony.py` 结合调式与情绪，生成基础/色彩和声，并支持自然小调的属功能与二级属。
-- 渲染层：`render.py` 输出 JSON、文字摘要及可选分轨 MIDI，并提供局部再生统计。
-- Web UI：Vite + React + TailwindCSS + Shoelace + Tone.js 作为可视化控制台，通过 FastAPI 与上述层级交互。
+## 2. 系统架构说明
+```
+Prompt → 解析层(parsing) → 骨架JSON(schema) → 动机生成(motif)
+      → 曲式展开(form) → 和声填充(harmony) → 渲染MIDI(render)
+      → 输出(outputs/*.mid, *.json)
+      ↑
+      Web前端(web/) ←→ FastAPI API
+```
+- **解析层（parsing）**：解析自然语言 Prompt，提取节奏、情绪、调式、曲式等元信息。
+- **骨架 JSON（schema）**：根据解析结果建立 `ProjectSpec`，定义段落结构、动机字典与配器框架。
+- **动机生成（motif）**：生成核心动机音高与节奏轮廓，为后续段落扩展提供素材。
+- **曲式展开（form）**：将动机映射到各个段落，设定小节长度、张力与再生成计数。
+- **和声填充（harmony）**：依据调式和情绪填入和弦走向，支持基础与色彩和声混合。
+- **渲染 MIDI（render）**：整合旋律、和声、配器并输出 JSON、摘要与可选分轨 MIDI。
+- **Web 前端（web/）**：提供参数控制台、段落编辑、播放器与下载入口，通过 FastAPI API 调用上述层。
 
-## 当前功能（本次迭代）
-- 自然语言生成与再生：支持全量生成、局部再生、动机冻结。
-- 分轨导出：可选择旋律/和声/贝斯/打击任意子集，并返回每条轨道的音符数量与时长。
-- 工程持久化：CLI/API 可保存与载入 `ProjectSpec`，便于多轮迭代。
-- Web UI：提供 Prompt 输入、参数旋钮、段落表格、局部再生按钮、在线播放（Tone.js）与 MIDI 下载。
-- CLI 增强：新增 `regen-section`、`save-project`、`load-project` 三个命令，均附中文帮助与错误提示。
-- 解析增强：覆盖 10+ 情绪场景预设，支持显式 BPM/拍号/曲式模板解析，自动识别“二级属”等关键词。
-
-## 使用步骤
-### Python 端
-1. 安装依赖并运行测试：
+## 3. 使用说明
+### 后端
+1. **环境准备**
    ```bash
    python -m venv .venv
    source .venv/bin/activate  # Windows 使用 .venv\\Scripts\\activate
    pip install -r requirements.txt
+   ```
+2. **运行测试（可选）**
+   ```bash
    pytest -q
    ```
-2. 启动 API 服务：
-   ```bash
-   uvicorn motifmaker.api:app --reload
-   ```
-3. 使用 CLI 生成或再生：
+3. **运行 CLI 示例**
    ```bash
    motifmaker init-from-prompt "城市夜景 Lo-Fi" --out outputs/demo --emit-midi
    motifmaker regen-section --spec outputs/demo/spec.json --section-index 1 --keep-motif true --out outputs/demo_regen
    motifmaker save-project --spec outputs/demo/spec.json --name city_night_v1
    motifmaker load-project --name city_night_v1 --out outputs/from_saved
    ```
+4. **启动 API 服务**
+   ```bash
+   uvicorn motifmaker.api:app --reload
+   ```
 
-### Web 端
-1. 启动前端开发服务器：
+### 前端
+1. 进入前端目录并安装依赖：
    ```bash
    cd web
-   npm install
+   npm i
+   ```
+2. 启动开发服务器：
+   ```bash
    npm run dev
    ```
-2. 浏览器访问 http://localhost:5173；若后端不在本机，可在启动前设置 `VITE_API_BASE=http://后端地址:端口`。
-3. 保证后端 FastAPI 通过 `uvicorn motifmaker.api:app --reload` 运行后，再在 UI 中输入 Prompt 并点击“一键生成”。
-4. 左侧面板可覆盖节奏/调性/配器，右侧表格可编辑段落并局部再生成；下载栏仅提供链接，不会将 .mid/.json 纳入仓库。
-5. 若浏览器无声，请先点击播放按钮以激活音频上下文；如遇跨域需在后端允许前端来源。
+3. 浏览器访问 [http://localhost:5173](http://localhost:5173)。如需指向远程后端，可在启动前设置 `VITE_API_BASE=http://后端地址:端口`。
 
-## 参数与交互大纲
-- 情绪旋钮：滑块映射至和声复杂度（柔和/色彩），对应 `harmony_level`。
-- 乐理旋钮：下拉菜单控制调性、调式、速度(BPM)与拍号，实时更新 `ProjectSpec`。
-- 制作旋钮：复选框切换配器厚度（钢琴、弦乐、合成器等），同时可选择分轨导出集合。
-- 曲式编辑表：表格支持修改每段的 `bars` 与 `tension`，并提供“局部再生成”“更换动机再生”“冻结动机”按钮。
-- 局部再生：调用 `/regenerate-section`，可选择是否保留原动机标签。
-- 动机冻结：调用 `/freeze-motif` 将指定标签的 `_frozen` 标记设为 `true`。
+### 典型操作流程
+1. 在 Web UI 输入 Prompt 并点击“生成”。
+2. 试听或下载返回的 MIDI；必要时保存工程以便下次载入。
+3. 在 FormTable 中调整段落参数，选择“局部再生成”或“保留动机再生”。
+4. 使用“动机冻结”防止特定素材被替换，或通过“保存工程”持久化修改。
+5. 需要分轨导出时，在参数面板勾选对应轨道后重新渲染。
 
-## 输出与文件结构
-- `outputs/*.mid`：可选生成的 MIDI，命名如 `outputs/prompt_xxxx/track.mid`。
-- `outputs/*.json`：渲染后的项目规格（带再生计数）。
-- `outputs/summary.txt`：按段落生成的文字摘要。
-- `projects/*.json`：通过 `save-project` 或 API `/save-project` 保存的工程快照。
-- Web UI 产物存放于 `web/`，构建产出的 `web/dist/` 已加入 `.gitignore`。
+## 4. 当前功能
+- 一键生成：从 Prompt 自动生成动机、段落、和声与渲染输出。
+- 局部再生：针对任意段落重新生成并更新再生成计数。
+- 动机冻结：锁定动机标签，避免再生时被替换。
+- 保存/加载工程：将 `ProjectSpec` 保存在 `projects/` 中，实现多轮迭代。
+- 分轨导出：选择旋律、和声、贝斯、打击等轨道并获取统计信息。
+- Web UI 试听与下载：基于 Tone.js 的播放器与 MIDI/JSON 下载链接。
 
-## 未来蓝图（Roadmap）
-- 高级和声：引入借用和弦、完善二级属体系，支持更多调式转换案例。
-- 变奏算子：扩展节奏置换、序列推进、力度与时值人性化处理。
-- 音色库：建立 GM 到多音源的映射，并与 Ableton/Logic 等 DAW 模板打通。
-- 多模型支持：允许接入外部旋律/和声生成模型，构建多风格模板库。
+## 5. 参数与交互
+- **Tempo/Meter/Key/Mode**：调整速度、拍号与调式，直接影响渲染节奏与和声。
+- **Instrumentation**：选择配器厚度或特定乐器组合，决定导出的轨道类型。
+- **Harmony Options**：控制和声层级、二级属使用与色彩程度。
+- **FormTable 编辑**：可修改段落小节数、张力值，并在任意行触发局部再生成或切换动机。
+- **局部再生成逻辑**：当勾选“保留动机”时沿用原动机；取消勾选时会选择未冻结的替代动机。
+- **播放器**：提供基本播放/暂停，当前音色仅为参考，导出的 MIDI 可在 DAW 中重新配置。
 
-## 常见问题（FAQ）
-- **生成结果不悦耳怎么办？** 降低节奏密度、提高调性稳定度、减少张力峰值即可获得更平滑的编排。
-- **浏览器播放无声？** 某些浏览器需要用户点击页面后才允许播放音频，请先与页面交互后再点击播放按钮。
-- **如何仅导出旋律轨？** 在参数面板勾选需要的分轨即可，渲染结果的 `track_stats` 会同步更新。
-- **下载按钮提示 404？** 请确认后端服务仍在运行，并检查生成的 `outputs/` 目录中文件是否仍存在；必要时重新触发一次渲染以刷新文件路径。
+## 6. 输出文件结构
+- `outputs/`：包含生成的 `.mid` 与 `.json` 文件，用于临时试听与下载（不提交仓库）。
+- `projects/`：保存工程快照的 JSON 文件，便于在不同会话中继续编辑（不提交仓库）。
+- `web/dist/`：前端构建产物，仅在部署时使用（不提交仓库）。
 
-## 许可与致谢
+## 7. 未来路线图（Roadmap）
+- **和声扩展**：引入借用和弦、更多二级属、调式交替的策略库。
+- **旋律发展**：支持节奏置换、序列推进、尾音延长的自动化操作。
+- **表现力**：加入人性化力度、时值随机与动态曲线控制。
+- **乐器库**：映射更丰富的 GM 音色，并预设与 DAW 模板的对接方案。
+- **多模型支持**：允许接入外部旋律/和声生成模型或第三方 AI 服务。
+- **UI 扩展**：增加谱面可视化、参数自动推荐与历史对比视图。
+
+## 8. 常见问题 FAQ
+- **为什么生成的旋律不悦耳？** 尝试降低节奏复杂度、减少张力峰值或切换至稳定调式。
+- **浏览器为什么没声音？** 浏览器需要用户手势激活音频，请先点击播放按钮或其他控件。
+- **跨域问题？** 确保后端启用了 CORS，并检查 `VITE_API_BASE` 是否指向正确域名与端口。
+
+## 9. 许可与致谢
 - 许可证：MIT（详见 [LICENSE](LICENSE)）。
-- 致谢：项目使用了 FastAPI、Typer、pretty_midi、TailwindCSS、Shoelace、Tone.js、@tonejs/midi 等优秀的开源组件。
+- 致谢：项目使用了 FastAPI、Typer、music21、pretty_midi、Tone.js、React、TailwindCSS、Shoelace 等开源库。
 
-## 需要你来做
-- 如要部署线上 Demo：准备一个静态托管平台（Vercel/Netlify 等）及后端部署位置（Railway/Render/自有 VPS）。
-- 如要接入外部 AI 模型：请在本地 `.env` 中配置 API Key，避免提交到仓库。
-- 如要启用 HTTPS 或自定义域名：准备域名与证书，或使用托管平台的自动证书功能。
-- 如需持久云存储：提供 S3/OSS 等凭据（同样建议放置在 `.env`）。
-- 本地开发需安装 Node.js ≥ 18 用于前端构建与调试。
-
+## 10. 需要你来做（仓库所有者需执行的事项）
+- **若要上线 Demo**：
+  - 提供前端托管环境（如 Vercel、Netlify）。
+  - 提供后端运行环境（VPS、Render、Railway 等）。
+- **若要接入外部 AI 模型**：
+  - 提供 API Key 并存放于 `.env`，不要提交到仓库。
+- **若要使用自定义域名和 HTTPS**：
+  - 提供域名与证书，或选择平台自动证书配置。
+- **若要启用云存储（可选）**：
+  - 提供云存储凭据（S3、OSS 等）以保存渲染结果。
+- **本地开发环境准备**：
+  - 安装 Node.js ≥ 18 与 Python ≥ 3.10，以确保前后端均可正常运行。
