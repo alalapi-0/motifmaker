@@ -1,5 +1,8 @@
 """轻量级 API 测试，确保关键路由返回结构完整。"""
 
+from pathlib import Path
+from uuid import uuid4
+
 from fastapi.testclient import TestClient
 
 from motifmaker.api import app
@@ -50,3 +53,48 @@ def test_regenerate_section_structure() -> None:
     assert isinstance(data["sections"], dict) and data["sections"]
     first_section = next(iter(data["sections"].values()))
     assert "regeneration_count" in first_section
+
+
+def test_freeze_motif_marks_tags() -> None:
+    """验证 /freeze-motif 会为目标动机添加冻结标记。"""
+
+    generated = _generate_once()
+    spec = generated["project"]
+    first_tag = next(iter(spec["motif_specs"].keys()))
+
+    response = client.post(
+        "/freeze-motif",
+        json={"spec": spec, "motif_tags": [first_tag]},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    motif_specs = payload["project"]["motif_specs"]
+    assert motif_specs[first_tag]["_frozen"] is True
+
+
+def test_save_and_load_project_roundtrip() -> None:
+    """验证保存与载入工程后的字段保持一致。"""
+
+    generated = _generate_once()
+    spec = generated["project"]
+    name = f"pytest_{uuid4().hex}"
+
+    save_response = client.post(
+        "/save-project",
+        json={"spec": spec, "name": name},
+    )
+    assert save_response.status_code == 200
+    save_data = save_response.json()
+    saved_path = Path(save_data["path"])
+    assert saved_path.exists()
+
+    load_response = client.post("/load-project", json={"name": name})
+    assert load_response.status_code == 200
+    loaded = load_response.json()
+    assert loaded["project"]["form"] == spec["form"]
+    assert loaded["project"]["motif_specs"] == spec["motif_specs"]
+
+    try:
+        saved_path.unlink()
+    except FileNotFoundError:
+        pass
