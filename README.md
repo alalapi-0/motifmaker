@@ -83,7 +83,58 @@ Prompt → 解析层(parsing) → 骨架JSON(schema) → 动机生成(motif)
 - `projects/`：保存工程快照的 JSON 文件，便于在不同会话中继续编辑（不提交仓库）。
 - `web/dist/`：前端构建产物，仅在部署时使用（不提交仓库）。
 
-## 7. 未来路线图（Roadmap）
+## 7. 后端稳态与部署注意
+
+| 配置项 | 默认值 | 说明 |
+| --- | --- | --- |
+| `API_TITLE` | `MotifMaker API` | FastAPI 文档标题，可在生产环境展示品牌名称 |
+| `API_VERSION` | `0.2.0` | 对外版本号，/version 端点也会返回该值 |
+| `ALLOWED_ORIGINS` | `http://localhost:5173,http://localhost:3000` | CORS 白名单，建议线上环境收敛到固定域名 |
+| `OUTPUT_DIR` | `outputs` | 渲染产物存放目录，测试环境会自动指向临时目录 |
+| `PROJECTS_DIR` | `projects` | 工程 JSON 持久化目录，确保具备读写权限 |
+| `RATE_LIMIT_RPS` | `2` | 每个 IP 每秒允许的请求次数，轻量级内存限流 |
+| `LOG_LEVEL` | `INFO` | 日志等级，可调为 `DEBUG` 或 `WARNING` |
+
+示例 `.env`：
+
+```env
+# API_TITLE=My MotifMaker API
+# API_VERSION=1.0.0
+# ALLOWED_ORIGINS=https://music.example.com
+# OUTPUT_DIR=/var/motifmaker/outputs
+# PROJECTS_DIR=/var/motifmaker/projects
+# RATE_LIMIT_RPS=5
+# LOG_LEVEL=INFO
+```
+
+错误码以 `E_` 前缀表示，例如参数校验失败会返回：
+
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "E_VALIDATION",
+    "message": "请求参数校验失败",
+    "details": {"errors": [...]}
+  }
+}
+```
+
+应用日志采用统一格式 `[时间] 等级 模块 - 消息`，可通过 `LOG_LEVEL` 控制输出。若需对接集中日志服务，可在 `logging_setup.py` 中扩展 JSON Handler。
+
+限流器为内存版滑动窗口，默认按 `IP+路径` 每秒 2 次。部署到多实例时请考虑迁移到 Redis 或 API Gateway 限流。
+
+健康检查与元信息：
+
+```bash
+curl http://localhost:8000/healthz
+curl http://localhost:8000/version
+curl http://localhost:8000/config-public
+```
+
+仓库已在 `.gitignore` 中忽略 `outputs/`、`projects/`、`*.mid`、`web/node_modules/`、`web/dist/` 等目录，禁止将渲染产物与前端构建文件提交到版本库。
+
+## 8. 未来路线图（Roadmap）
 - **和声扩展**：引入借用和弦、更多二级属、调式交替的策略库。
 - **旋律发展**：支持节奏置换、序列推进、尾音延长的自动化操作。
 - **表现力**：加入人性化力度、时值随机与动态曲线控制。
@@ -91,16 +142,16 @@ Prompt → 解析层(parsing) → 骨架JSON(schema) → 动机生成(motif)
 - **多模型支持**：允许接入外部旋律/和声生成模型或第三方 AI 服务。
 - **UI 扩展**：增加谱面可视化、参数自动推荐与历史对比视图。
 
-## 8. 常见问题 FAQ
+## 9. 常见问题 FAQ
 - **为什么生成的旋律不悦耳？** 尝试降低节奏复杂度、减少张力峰值或切换至稳定调式。
 - **浏览器为什么没声音？** 浏览器需要用户手势激活音频，请先点击播放按钮或其他控件。
 - **跨域问题？** 确保后端启用了 CORS，并检查 `VITE_API_BASE` 是否指向正确域名与端口。
 
-## 9. 许可与致谢
+## 10. 许可与致谢
 - 许可证：MIT（详见 [LICENSE](LICENSE)）。
 - 致谢：项目使用了 FastAPI、Typer、music21、pretty_midi、Tone.js、React、TailwindCSS、Shoelace 等开源库。
 
-## 10. 需要你来做（仓库所有者需执行的事项）
+## 11. 需要你来做（仓库所有者需执行的事项）
 - **若要上线 Demo**：
   - 提供前端托管环境（如 Vercel、Netlify）。
   - 提供后端运行环境（VPS、Render、Railway 等）。

@@ -12,6 +12,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Dict, Iterable, List, Tuple, TypedDict
 
+from .errors import RenderError
+from .config import settings
+
 from .form import SectionSketch, expand_form
 from .harmony import HarmonyEvent, generate_harmony
 from .motif import Motif, MotifSpec, generate_motif
@@ -370,6 +373,47 @@ def _calculate_track_stats(
     return stats
 
 
+_PUBLIC_TRACKS = {
+    "lead": "melody",
+    "strings": "harmony",
+    "bass": "bass",
+    "drums": "percussion",
+}
+
+
+def _normalise_output_dir(output_dir: str | Path) -> Path:
+    """确保输出目录安全可写，防止目录穿越。"""
+
+    base_dir = ensure_directory(settings.output_dir)
+    target = Path(output_dir)
+    if target.is_absolute():
+        resolved = target.resolve()
+        return ensure_directory(resolved)
+    resolved = (Path(base_dir) / target).resolve()
+    base_root = Path(base_dir).resolve()
+    if not str(resolved).startswith(str(base_root)):
+        raise RenderError("输出目录不在允许范围内", details={"path": str(resolved)})
+    return ensure_directory(resolved)
+
+
+def _normalise_tracks(tracks_to_export: List[str] | None) -> List[str]:
+    """将外部请求的分轨名称映射到内部实现所需的键。"""
+
+    if not tracks_to_export:
+        return list(_PUBLIC_TRACKS.values())
+    normalised: List[str] = []
+    for raw in tracks_to_export:
+        key = raw.lower()
+        if key in _PUBLIC_TRACKS:
+            normalised.append(_PUBLIC_TRACKS[key])
+        elif key in _PUBLIC_TRACKS.values():
+            # 兼容旧版直接使用内部名称的调用。
+            normalised.append(key)
+        else:
+            raise RenderError("不支持的分轨名称", details={"track": raw})
+    return normalised
+
+
 def render_project(
     project_spec: ProjectSpec,
     output_dir: str | Path,
@@ -378,7 +422,7 @@ def render_project(
 ) -> RenderResult:
     """渲染项目，支持选择性导出分轨并返回详细统计信息。"""
 
-    output_path = ensure_directory(output_dir)
+    output_path = _normalise_output_dir(output_dir)
     logger.info(
         "Rendering project into %s (emit_midi=%s, tracks=%s)",
         output_path,
@@ -389,12 +433,7 @@ def render_project(
     _, sketches, harmony_map = _collect_sections(project_spec)
     summaries = _build_section_summaries(project_spec, sketches, harmony_map)
 
-    # 默认导出四条分轨，允许调用方通过列表精细控制。
-    available_tracks = ["melody", "harmony", "bass", "percussion"]
-    active_tracks = (
-        [track for track in tracks_to_export or available_tracks if track in available_tracks]
-        or []
-    )
+    active_tracks = _normalise_tracks(tracks_to_export)
     tempo = float(project_spec.tempo_bpm)
     track_stats = _calculate_track_stats(sketches, harmony_map, tempo, active_tracks)
 
@@ -422,34 +461,46 @@ def render_project(
     _write_summary_file(summary_path, summaries.values())
 
     midi_path: Path | None = None
-    if emit_midi and active_tracks:
-        pretty_midi = _require_pretty_midi()
-        instrumentation = project_spec.instrumentation or ["piano"]
-        midi = pretty_midi.PrettyMIDI()
-        primary_program = program_for_instrument(instrumentation[0])
-        if "melody" in active_tracks:
-            midi.instruments.append(_render_melody(sketches, tempo, primary_program))
-        if "harmony" in active_tracks:
-            harmony_program = (
-                program_for_instrument(instrumentation[1])
-                if len(instrumentation) > 1
-                else 48
-            )
-            midi.instruments.append(
-                _render_harmony(sketches, harmony_map, tempo, harmony_program)
-            )
-        if "bass" in active_tracks:
-            midi.instruments.append(_render_bass(sketches, harmony_map, tempo))
-        if "percussion" in active_tracks:
-            total_beats = sum(
-                sum(note.duration_beats for note in sketch.notes) for sketch in sketches
-            )
-            midi.instruments.append(_render_percussion(total_beats, tempo))
-        midi_path = output_path / "track.mid"
-        midi.write(str(midi_path))
-        logger.info("MIDI file written to %s", midi_path)
-    elif emit_midi:
-        logger.info("MIDI export requested但未选择任何分轨，跳过写入。")
+    if emit_midi:
+        if not active_tracks:
+            logger.info("MIDI export requested但未选择任何分轨，跳过写入。")
+        else:
+            try:
+                pretty_midi = _require_pretty_midi()
+            except RuntimeError as exc:
+                raise RenderError(str(exc)) from exc
+            instrumentation = project_spec.instrumentation or ["piano"]
+            midi = pretty_midi.PrettyMIDI()
+            primary_program = program_for_instrument(instrumentation[0])
+            if "melody" in active_tracks:
+                midi.instruments.append(
+                    _render_melody(sketches, tempo, primary_program)
+                )
+            if "harmony" in active_tracks:
+                harmony_program = (
+                    program_for_instrument(instrumentation[1])
+                    if len(instrumentation) > 1
+                    else 48
+                )
+                midi.instruments.append(
+                    _render_harmony(sketches, harmony_map, tempo, harmony_program)
+                )
+            if "bass" in active_tracks:
+                midi.instruments.append(_render_bass(sketches, harmony_map, tempo))
+            if "percussion" in active_tracks:
+                total_beats = sum(
+                    sum(note.duration_beats for note in sketch.notes)
+                    for sketch in sketches
+                )
+                midi.instruments.append(_render_percussion(total_beats, tempo))
+            midi_path = output_path / "track.mid"
+            try:
+                midi.write(str(midi_path))
+            except Exception as exc:  # pragma: no cover - 依赖外部库
+                raise RenderError(
+                    "写入 MIDI 文件失败", details={"path": str(midi_path)}
+                ) from exc
+            logger.info("MIDI file written to %s", midi_path)
 
     return RenderResult(
         output_dir=str(output_path),
@@ -472,7 +523,9 @@ def regenerate_section(
 
     form_sections = list(project_spec.form)
     if not keep_motif:
-        motif_specs = {label: dict(data) for label, data in project_spec.motif_specs.items()}
+        motif_specs = {
+            label: dict(data) for label, data in project_spec.motif_specs.items()
+        }
         for idx, section in enumerate(form_sections):
             if section.section != section_name:
                 continue
@@ -484,7 +537,9 @@ def regenerate_section(
                 alternative = label
                 break
             if alternative:
-                form_sections[idx] = section.model_copy(update={"motif_label": alternative})
+                form_sections[idx] = section.model_copy(
+                    update={"motif_label": alternative}
+                )
                 break
     working_spec = project_spec.model_copy(update={"form": form_sections})
 

@@ -142,7 +142,11 @@ def generate_harmony(
             ):
                 secondary_duration = segment_beats / 2.0
                 secondary_root = root_pitch + 2
-                secondary_pitches = [secondary_root, secondary_root + 4, secondary_root + 7]
+                secondary_pitches = [
+                    secondary_root,
+                    secondary_root + 4,
+                    secondary_root + 7,
+                ]
                 events.append(
                     HarmonyEvent(
                         start_beat=start_beat,
