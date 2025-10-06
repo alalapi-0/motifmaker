@@ -14,13 +14,13 @@ def _generate_once() -> dict:
     response = client.post("/generate", json={"prompt": "城市夜景 Lo-Fi 学习"})
     assert response.status_code == 200
     data = response.json()
+    assert data["ok"] is True
+    result = data["result"]
     for key in ("output_dir", "spec", "summary", "project", "sections", "track_stats"):
-        assert key in data
-    # track_stats 应返回一个列表描述每条分轨的统计信息。
-    assert isinstance(data["track_stats"], list)
-    # form 字段内含曲式段落描述，确保生成规格非空。
-    assert data["project"]["form"]
-    return data
+        assert key in result
+    assert isinstance(result["track_stats"], list)
+    assert result["project"]["form"]
+    return result
 
 
 def test_generate_endpoint_returns_summary() -> None:
@@ -45,7 +45,7 @@ def test_regenerate_section_structure() -> None:
         },
     )
     assert response.status_code == 200
-    data = response.json()
+    data = response.json()["result"]
     assert "project" in data
     assert "sections" in data
     assert len(data["track_stats"]) >= 1
@@ -67,7 +67,7 @@ def test_freeze_motif_marks_tags() -> None:
         json={"spec": spec, "motif_tags": [first_tag]},
     )
     assert response.status_code == 200
-    payload = response.json()
+    payload = response.json()["result"]
     motif_specs = payload["project"]["motif_specs"]
     assert motif_specs[first_tag]["_frozen"] is True
 
@@ -84,13 +84,13 @@ def test_save_and_load_project_roundtrip() -> None:
         json={"spec": spec, "name": name},
     )
     assert save_response.status_code == 200
-    save_data = save_response.json()
+    save_data = save_response.json()["result"]
     saved_path = Path(save_data["path"])
     assert saved_path.exists()
 
     load_response = client.post("/load-project", json={"name": name})
     assert load_response.status_code == 200
-    loaded = load_response.json()
+    loaded = load_response.json()["result"]
     assert loaded["project"]["form"] == spec["form"]
     assert loaded["project"]["motif_specs"] == spec["motif_specs"]
 

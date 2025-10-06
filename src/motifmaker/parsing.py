@@ -1,8 +1,8 @@
 """提示解析器：将自然语言 Prompt 转换为工程元数据。
 
-模块使用正则与关键词匹配，将情绪、风格与显式参数映射到结构化字典。
-示例："城市夜景 90 BPM Lo-Fi 学习" 会匹配到 urban-ambient 的预设、
-覆盖节奏为 90 BPM，并结合动机/配器关键词组合出 ProjectSpec 所需字段。
+在原有关键词匹配基础上增加了严格的数值校验与兜底逻辑：节奏 BPM
+被限制在 40-220 范围，拍号限定为 4/4 或 3/4，张力曲线固定为 6 段且
+取值 0-100。当解析失败或超出范围时会记录 WARN 日志并回退到安全默认。
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from typing import Dict, List
 
 logger = logging.getLogger(__name__)
 
-# 情绪场景预设，覆盖 10+ 常见风格，便于前端直接呈现默认参数。
+# 情绪场景预设，覆盖常见风格并给出完整的 6 点张力曲线。
 SCENARIO_PRESETS: List[tuple[List[str], Dict[str, object]]] = [
     (
         ["城市夜景", "都市夜", "city night"],
@@ -29,7 +29,7 @@ SCENARIO_PRESETS: List[tuple[List[str], Dict[str, object]]] = [
                 "synth-bass",
                 "percussion",
             ],
-            "tension_curve": [0.25, 0.6, 0.9, 0.5],
+            "tension_curve": [25, 45, 80, 90, 60, 40],
             "use_secondary_dominant": True,
         },
     ),
@@ -39,10 +39,10 @@ SCENARIO_PRESETS: List[tuple[List[str], Dict[str, object]]] = [
             "key": "G",
             "mode": "major",
             "tempo_bpm": 108,
-            "meter": "6/8",
+            "meter": "3/4",
             "style": "pastoral-acoustic",
             "instrumentation": ["acoustic-guitar", "flute", "strings", "percussion"],
-            "tension_curve": [0.2, 0.45, 0.6, 0.35],
+            "tension_curve": [20, 35, 55, 65, 50, 35],
         },
     ),
     (
@@ -54,7 +54,7 @@ SCENARIO_PRESETS: List[tuple[List[str], Dict[str, object]]] = [
             "meter": "4/4",
             "style": "sci-fi-suspense",
             "instrumentation": ["synth-pad", "fx", "low-brass", "percussion"],
-            "tension_curve": [0.3, 0.55, 0.85, 0.6],
+            "tension_curve": [30, 50, 85, 95, 70, 55],
         },
     ),
     (
@@ -66,7 +66,7 @@ SCENARIO_PRESETS: List[tuple[List[str], Dict[str, object]]] = [
             "meter": "4/4",
             "style": "nostalgic-folk",
             "instrumentation": ["acoustic-guitar", "harmonica", "strings"],
-            "tension_curve": [0.25, 0.4, 0.65, 0.3],
+            "tension_curve": [25, 40, 60, 70, 45, 30],
         },
     ),
     (
@@ -78,7 +78,7 @@ SCENARIO_PRESETS: List[tuple[List[str], Dict[str, object]]] = [
             "meter": "4/4",
             "style": "lofi-study",
             "instrumentation": ["electric-piano", "vinyl-kit", "bass", "synth-pad"],
-            "tension_curve": [0.2, 0.35, 0.5, 0.3],
+            "tension_curve": [20, 30, 45, 55, 40, 25],
         },
     ),
     (
@@ -90,7 +90,7 @@ SCENARIO_PRESETS: List[tuple[List[str], Dict[str, object]]] = [
             "meter": "4/4",
             "style": "epic-trailer",
             "instrumentation": ["strings", "brass", "choir", "percussion"],
-            "tension_curve": [0.35, 0.55, 0.95, 0.8],
+            "tension_curve": [35, 55, 90, 100, 80, 60],
         },
     ),
     (
@@ -102,7 +102,7 @@ SCENARIO_PRESETS: List[tuple[List[str], Dict[str, object]]] = [
             "meter": "4/4",
             "style": "lyrical-piano",
             "instrumentation": ["piano", "strings"],
-            "tension_curve": [0.2, 0.4, 0.6, 0.3],
+            "tension_curve": [20, 35, 55, 65, 45, 30],
         },
     ),
     (
@@ -114,7 +114,7 @@ SCENARIO_PRESETS: List[tuple[List[str], Dict[str, object]]] = [
             "meter": "4/4",
             "style": "fresh-acoustic",
             "instrumentation": ["acoustic-guitar", "ukulele", "percussion"],
-            "tension_curve": [0.25, 0.45, 0.55, 0.35],
+            "tension_curve": [25, 45, 60, 70, 50, 35],
         },
     ),
     (
@@ -126,7 +126,7 @@ SCENARIO_PRESETS: List[tuple[List[str], Dict[str, object]]] = [
             "meter": "4/4",
             "style": "retro-synthwave",
             "instrumentation": ["synth-lead", "synth-bass", "drum-machine"],
-            "tension_curve": [0.3, 0.5, 0.8, 0.5],
+            "tension_curve": [30, 50, 80, 85, 65, 45],
         },
     ),
     (
@@ -138,7 +138,7 @@ SCENARIO_PRESETS: List[tuple[List[str], Dict[str, object]]] = [
             "meter": "4/4",
             "style": "modern-jazz",
             "instrumentation": ["piano", "saxophone", "upright-bass", "drums"],
-            "tension_curve": [0.35, 0.55, 0.75, 0.5],
+            "tension_curve": [35, 50, 75, 85, 65, 50],
         },
     ),
     (
@@ -150,7 +150,7 @@ SCENARIO_PRESETS: List[tuple[List[str], Dict[str, object]]] = [
             "meter": "3/4",
             "style": "adventure-orchestral",
             "instrumentation": ["strings", "woodwinds", "percussion"],
-            "tension_curve": [0.3, 0.45, 0.7, 0.4],
+            "tension_curve": [30, 45, 70, 80, 55, 40],
         },
     ),
 ]
@@ -199,7 +199,6 @@ METER_KEYWORDS = {
     "慢": "4/4",
     "舞曲": "4/4",
     "轻快": "4/4",
-    "流动": "6/8",
 }
 
 FORM_HINTS = {
@@ -244,6 +243,9 @@ FORM_SEQUENCE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+_DEFAULT_TENSION = [30, 45, 60, 70, 50, 35]
+_ALLOWED_METERS = {"4/4", "3/4"}
+
 
 def _normalise(text: str) -> str:
     """去除前后空白并返回原字符串副本。"""
@@ -258,7 +260,6 @@ def _detect_scenario(prompt: str) -> Dict[str, object]:
     for keywords, preset in SCENARIO_PRESETS:
         if any(keyword.lower() in lowered for keyword in keywords):
             meta = dict(preset)
-            # 深拷贝乐器列表，避免后续 append 修改常量。
             if "instrumentation" in meta:
                 meta["instrumentation"] = list(meta["instrumentation"])
             return meta
@@ -333,16 +334,16 @@ def _detect_form(prompt: str) -> tuple[str | None, List[str] | None]:
     return None, None
 
 
-def _detect_tension(prompt: str) -> List[float]:
-    """根据描述返回张力曲线。"""
+def _detect_tension(prompt: str) -> List[int]:
+    """根据描述返回 6 个节点的张力曲线。"""
 
     if "最高" in prompt and "B" in prompt:
-        return [0.3, 0.9, 0.4]
+        return [30, 60, 90, 95, 70, 50]
     if "渐进" in prompt:
-        return [0.2, 0.4, 0.8]
+        return [20, 35, 50, 65, 80, 60]
     if "舒缓" in prompt:
-        return [0.2, 0.35, 0.5]
-    return [0.3, 0.7, 0.4]
+        return [15, 25, 35, 45, 40, 30]
+    return list(_DEFAULT_TENSION)
 
 
 def _detect_motif_style(prompt: str) -> str | None:
@@ -387,19 +388,68 @@ def _extract_numeric_overrides(prompt: str) -> Dict[str, object]:
     return overrides
 
 
-def parse_natural_prompt(text: str) -> Dict[str, object]:
-    """将自然语言提示解析为结构化元数据。
+def _clamp_tempo(value: int) -> int:
+    """将 BPM 限制在安全范围，超出时记录警告。"""
 
-    示例::
-        >>> parse_natural_prompt("城市夜景 90 BPM Lo-Fi 学习 A-B-A′")
-        {'key': 'E', 'mode': 'minor', 'tempo_bpm': 90, 'meter': '4/4', ...}
-    """
+    if 40 <= value <= 220:
+        return value
+    logger.warning("tempo_bpm 超出范围，已回退到 100: %s", value)
+    return 100
+
+
+def _clamp_meter(value: str) -> str:
+    """保证拍号属于允许集合。"""
+
+    if value in _ALLOWED_METERS:
+        return value
+    logger.warning("meter 非允许值，已回退到 4/4: %s", value)
+    return "4/4"
+
+
+def _normalise_tension_curve(values: List[object] | None) -> List[int]:
+    """确保张力曲线长度为 6 且取值在 0-100。"""
+
+    if not values:
+        logger.warning("未解析到张力曲线，使用默认值")
+        return list(_DEFAULT_TENSION)
+    normalised: List[int] = []
+    for raw in values:
+        try:
+            number = int(float(raw))
+        except (TypeError, ValueError):
+            logger.warning("张力曲线包含无法解析的值: %s", raw)
+            continue
+        normalised.append(max(0, min(100, number)))
+    if not normalised:
+        logger.warning("张力曲线清洗后为空，使用默认值")
+        normalised = list(_DEFAULT_TENSION)
+    if len(normalised) < 6:
+        normalised.extend([normalised[-1]] * (6 - len(normalised)))
+    if len(normalised) > 6:
+        normalised = normalised[:6]
+    return normalised
+
+
+def _merge_instrumentation(base: List[str], additions: List[str]) -> List[str]:
+    """合并配器并限制总数不超过 16。"""
+
+    result: List[str] = []
+    for name in base + additions:
+        if name not in result:
+            result.append(name)
+        if len(result) >= 16:
+            logger.warning("配器数量达到上限 16，后续条目被忽略")
+            break
+    return result or ["piano"]
+
+
+def parse_natural_prompt(text: str) -> Dict[str, object]:
+    """将自然语言提示解析为结构化元数据。"""
 
     prompt = _normalise(text)
     scenario_meta = _detect_scenario(prompt)
     meta: Dict[str, object] = dict(scenario_meta)
 
-    # 情景预设之外的默认推断仍然执行，以便补全缺失字段。
     if "key" not in meta:
         key, mode = _detect_key_mode(prompt)
         meta.update({"key": key, "mode": mode})
@@ -410,16 +460,10 @@ def parse_natural_prompt(text: str) -> Dict[str, object]:
     if "style" not in meta:
         meta["style"] = _detect_style(prompt)
 
-    # 解析配器并合并到场景预设提供的默认值中。
     instruments = list(meta.get("instrumentation", []))
-    for inst in _detect_instrumentation(prompt):
-        if inst not in instruments:
-            instruments.append(inst)
-    if not instruments:
-        instruments.append("piano")
-    meta["instrumentation"] = instruments
+    additions = _detect_instrumentation(prompt)
+    meta["instrumentation"] = _merge_instrumentation(instruments, additions)
 
-    # 曲式解析：优先读取显式序列，其次是模板关键词。
     form_template, form_sequence = _detect_form(prompt)
     if form_sequence:
         meta["custom_form_sequence"] = form_sequence
@@ -428,7 +472,9 @@ def parse_natural_prompt(text: str) -> Dict[str, object]:
     else:
         meta["form_template"] = meta.get("form_template", "ABA")
 
-    meta["tension_curve"] = meta.get("tension_curve", _detect_tension(prompt))
+    meta["tension_curve"] = _normalise_tension_curve(
+        meta.get("tension_curve") or _detect_tension(prompt)
+    )
 
     motif_style = _detect_motif_style(prompt)
     if motif_style:
@@ -442,12 +488,13 @@ def parse_natural_prompt(text: str) -> Dict[str, object]:
     if harmony_level:
         meta["harmony_level"] = harmony_level
 
-    # 二级属开关：当用户显式提及时强制开启。
     if any(keyword in prompt.lower() for keyword in SECONDARY_DOMINANT_KEYWORDS):
         meta["use_secondary_dominant"] = True
 
-    # 显式数值覆盖写在最后，确保 BPM/拍号指令优先生效。
     meta.update(_extract_numeric_overrides(prompt))
+
+    meta["tempo_bpm"] = _clamp_tempo(int(meta.get("tempo_bpm", 100)))
+    meta["meter"] = _clamp_meter(str(meta.get("meter", "4/4")))
 
     logger.info(
         "Parsed prompt into meta: key=%s mode=%s style=%s",

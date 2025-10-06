@@ -1,39 +1,114 @@
-"""FastAPI 服务入口，提供 Prompt 解析与渲染 API。
+"""FastAPI 服务入口，负责暴露音乐动机生成、渲染与工程管理接口。
 
-模块同时启用 CORS 以便 Vite 前端通过 http://localhost:5173 或
-http://localhost:3000 访问。所有关键步骤均附带中文注释，解释如何在服务端
-执行生成、局部再生成、动机冻结以及工程持久化等操作。
-"""
+该版本引入统一配置、错误码、日志与限流机制，确保在不改变既有功能
+的前提下提升稳健性。所有新增逻辑均包含中文注释说明设计原因。"""
 
 from __future__ import annotations
 
-import logging
+import time
 from pathlib import Path
 from typing import Literal, Optional
 from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
+from .config import settings
+from .errors import (
+    MMError,
+    PersistenceError,
+    RenderError,
+    ValidationError,
+    error_response,
+    InternalServerError,
+)
+from .logging_setup import get_logger, setup_logging
 from .parsing import parse_natural_prompt
 from .persistence import load_project_json, save_project_json
+from .ratelimit import rate_limiter
 from .render import RenderResult, render_project
 from .schema import ProjectSpec, default_from_prompt_meta
 from .utils import ensure_directory
 
-logger = logging.getLogger(__name__)
+setup_logging()
+logger = get_logger(__name__)
 
-app = FastAPI(title="Motifmaker")
+app = FastAPI(title=settings.api_title, version=settings.api_version)
 
-# 允许本地前端 (Vite/Shoelace) 直接调用 API，开发调试更顺畅。
+# 允许的跨域来源来自配置，生产环境建议收敛为固定域名列表。
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=settings.allowed_origins,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization"],
+    allow_credentials=False,
 )
+
+
+@app.middleware("http")
+async def request_logging_middleware(request: Request, call_next):
+    """记录每次请求的核心指标，便于可观测性分析。"""
+
+    start = time.perf_counter()
+    response = None
+    try:
+        response = await call_next(request)
+        return response
+    finally:
+        duration_ms = (time.perf_counter() - start) * 1000
+        client_ip = request.client.host if request.client else "anonymous"
+        status_code = response.status_code if response else 500
+        logger.info(
+            "request method=%s path=%s status=%s duration_ms=%.2f ip=%s",
+            request.method,
+            request.url.path,
+            status_code,
+            duration_ms,
+            client_ip,
+        )
+
+
+@app.exception_handler(MMError)
+async def handle_mm_error(request: Request, exc: MMError):
+    """捕获业务层异常并返回统一错误响应。"""
+
+    client_ip = request.client.host if request.client else "anonymous"
+    logger.warning(
+        "handled_error method=%s path=%s status=%s ip=%s error_code=%s",
+        request.method,
+        request.url.path,
+        exc.http_status,
+        client_ip,
+        exc.code,
+    )
+    return JSONResponse(status_code=exc.http_status, content=error_response(exc))
+
+
+@app.exception_handler(RequestValidationError)
+async def handle_pydantic_error(request: Request, exc: RequestValidationError):
+    """将 FastAPI 的请求校验错误转换为统一错误码。"""
+
+    err = ValidationError("请求参数校验失败", details={"errors": exc.errors()})
+    return JSONResponse(status_code=err.http_status, content=error_response(err))
+
+
+@app.exception_handler(Exception)
+async def handle_unexpected_error(request: Request, exc: Exception):
+    """兜底未知异常，避免堆栈泄露给客户端。"""
+
+    client_ip = request.client.host if request.client else "anonymous"
+    logger.error(
+        "unhandled_error method=%s path=%s ip=%s",
+        request.method,
+        request.url.path,
+        client_ip,
+        exc_info=exc,
+    )
+    err = InternalServerError()
+    return JSONResponse(status_code=err.http_status, content=error_response(err))
 
 
 class GenerationOptions(BaseModel):
@@ -122,6 +197,69 @@ class LoadProjectResponse(BaseModel):
     path: str
 
 
+class SuccessRenderResponse(BaseModel):
+    """统一响应包装：渲染成功时返回 ok/result。"""
+
+    ok: Literal[True]
+    result: RenderResponse
+
+
+class SuccessFreezeResponse(BaseModel):
+    """冻结动机成功后的统一响应结构。"""
+
+    ok: Literal[True]
+    result: FreezeMotifResponse
+
+
+class SuccessSaveResponse(BaseModel):
+    """保存工程成功返回包装。"""
+
+    ok: Literal[True]
+    result: SaveProjectResponse
+
+
+class SuccessLoadResponse(BaseModel):
+    """载入工程成功返回包装。"""
+
+    ok: Literal[True]
+    result: LoadProjectResponse
+
+
+class HealthResponse(BaseModel):
+    """健康检查响应，仅暴露时间戳方便探针使用。"""
+
+    ok: Literal[True]
+    ts: int
+
+
+class VersionResponse(BaseModel):
+    """版本信息响应，提供后端版本号。"""
+
+    version: str
+
+
+class ConfigPublicResponse(BaseModel):
+    """可公开的配置快照，排除敏感信息。"""
+
+    output_dir: str
+    projects_dir: str
+    allowed_origins: list[str]
+
+
+def success_response(
+    payload: BaseModel | RenderResult | dict[str, object],
+) -> dict[str, object]:
+    """统一成功响应格式，兼容 Pydantic 模型与普通字典。"""
+
+    if isinstance(payload, BaseModel):
+        result = payload.model_dump(mode="json")
+    elif isinstance(payload, dict):
+        result = payload
+    else:
+        result = dict(payload)
+    return {"ok": True, "result": result}
+
+
 def _apply_options(spec: ProjectSpec, options: GenerationOptions | None) -> ProjectSpec:
     """合并前端传入的可选参数，返回新的 ProjectSpec。"""
 
@@ -150,14 +288,17 @@ def _render_with_paths(
     emit_midi: bool,
     tracks_to_export: list[str] | None = None,
 ) -> RenderResult:
-    """在 outputs/ 下渲染并返回渲染结果。"""
+    """在配置指定的目录下渲染并返回结果。"""
 
-    output_dir = ensure_directory(Path("outputs") / f"prompt_{uuid4().hex[:8]}")
+    base_dir = ensure_directory(settings.output_dir)
+    output_dir = ensure_directory(Path(base_dir) / f"prompt_{uuid4().hex[:8]}")
     logger.info(
-        "API rendering into %s (emit_midi=%s, tracks=%s)",
-        output_dir,
-        emit_midi,
-        tracks_to_export,
+        "render_start",
+        extra={
+            "output_dir": str(output_dir),
+            "emit_midi": emit_midi,
+            "tracks": tracks_to_export,
+        },
     )
     return render_project(
         spec,
@@ -181,10 +322,16 @@ def _build_render_response(result: RenderResult) -> RenderResponse:
     )
 
 
-@app.post("/generate", response_model=RenderResponse)
-async def generate(request: GenerateRequest) -> RenderResponse:
+@app.post(
+    "/generate",
+    response_model=SuccessRenderResponse,
+    dependencies=[Depends(rate_limiter)],
+)
+async def generate(request: GenerateRequest) -> dict[str, object]:
     """根据自然语言 Prompt 生成项目规格并渲染。"""
 
+    if not request.prompt.strip():
+        raise ValidationError("Prompt 不能为空")
     meta = parse_natural_prompt(request.prompt)
     spec = default_from_prompt_meta(meta)
     spec = _apply_options(spec, request.options)
@@ -194,11 +341,15 @@ async def generate(request: GenerateRequest) -> RenderResponse:
         emit_midi=bool(request.options and request.options.emit_midi),
         tracks_to_export=tracks,
     )
-    return _build_render_response(result)
+    return success_response(_build_render_response(result))
 
 
-@app.post("/render", response_model=RenderResponse)
-async def render_existing(request: RenderRequest) -> RenderResponse:
+@app.post(
+    "/render",
+    response_model=SuccessRenderResponse,
+    dependencies=[Depends(rate_limiter)],
+)
+async def render_existing(request: RenderRequest) -> dict[str, object]:
     """渲染已有 ProjectSpec，常用于前端编辑后的再渲染。"""
 
     try:
@@ -207,20 +358,26 @@ async def render_existing(request: RenderRequest) -> RenderResponse:
             emit_midi=request.emit_midi,
             tracks_to_export=request.tracks,
         )
-    except Exception as exc:  # pragma: no cover - FastAPI 错误路径
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return _build_render_response(result)
+    except MMError:
+        raise
+    except Exception as exc:
+        raise RenderError(str(exc)) from exc
+    return success_response(_build_render_response(result))
 
 
-@app.post("/regenerate-section", response_model=RenderResponse)
+@app.post(
+    "/regenerate-section",
+    response_model=SuccessRenderResponse,
+    dependencies=[Depends(rate_limiter)],
+)
 async def regenerate_section_api(
     request: RegenerateSectionRequest,
-) -> RenderResponse:
+) -> dict[str, object]:
     """仅针对某个段落执行再生成，返回新的摘要与 MIDI 路径。"""
 
     section_count = len(request.spec.form)
     if request.section_index < 0 or request.section_index >= section_count:
-        raise HTTPException(status_code=400, detail="段落索引越界")
+        raise ValidationError("段落索引越界")
 
     spec = request.spec
     sections = list(spec.form)
@@ -255,47 +412,70 @@ async def regenerate_section_api(
         emit_midi=request.emit_midi,
         tracks_to_export=request.tracks,
     )
-    return _build_render_response(result)
+    return success_response(_build_render_response(result))
 
 
-@app.post("/freeze-motif", response_model=FreezeMotifResponse)
-async def freeze_motif(request: FreezeMotifRequest) -> FreezeMotifResponse:
+@app.post(
+    "/freeze-motif",
+    response_model=SuccessFreezeResponse,
+    dependencies=[Depends(rate_limiter)],
+)
+async def freeze_motif(request: FreezeMotifRequest) -> dict[str, object]:
     """将指定动机标签标记为冻结，防止后续被替换。"""
 
-    motif_specs = {label: dict(data) for label, data in request.spec.motif_specs.items()}
+    motif_specs = {
+        label: dict(data) for label, data in request.spec.motif_specs.items()
+    }
     updated = False
     for tag in request.motif_tags:
         if tag not in motif_specs:
-            raise HTTPException(status_code=404, detail=f"未知动机标签: {tag}")
+            raise ValidationError(f"未知动机标签: {tag}")
         if not motif_specs[tag].get("_frozen"):
             motif_specs[tag]["_frozen"] = True
             updated = True
     if not updated:
-        logger.info("Motif freeze request did not modify any state")
+        logger.info("freeze_motif_skip", extra={"tags": request.motif_tags})
     project = request.spec.model_copy(update={"motif_specs": motif_specs})
-    return FreezeMotifResponse(project=project)
+    return success_response(FreezeMotifResponse(project=project))
 
 
-@app.post("/save-project", response_model=SaveProjectResponse)
-async def save_project(request: SaveProjectRequest) -> SaveProjectResponse:
-    """将 ProjectSpec 保存到 projects/ 目录，返回文件路径。"""
+@app.post(
+    "/save-project",
+    response_model=SuccessSaveResponse,
+    dependencies=[Depends(rate_limiter)],
+)
+async def save_project(request: SaveProjectRequest) -> dict[str, object]:
+    """将 ProjectSpec 保存到配置的 projects/ 目录，返回文件路径。"""
 
-    path = save_project_json(request.spec, request.name)
-    return SaveProjectResponse(path=str(path))
+    try:
+        path = save_project_json(request.spec, request.name)
+    except MMError:
+        raise
+    except Exception as exc:
+        raise PersistenceError(str(exc)) from exc
+    return success_response(SaveProjectResponse(path=str(path)))
 
 
-@app.post("/load-project", response_model=LoadProjectResponse)
-async def load_project(request: LoadProjectRequest) -> LoadProjectResponse:
-    """从 projects/ 目录读取 ProjectSpec。"""
+@app.post(
+    "/load-project",
+    response_model=SuccessLoadResponse,
+    dependencies=[Depends(rate_limiter)],
+)
+async def load_project(request: LoadProjectRequest) -> dict[str, object]:
+    """从配置的 projects/ 目录读取 ProjectSpec。"""
 
     try:
         spec = load_project_json(request.name)
+    except MMError as exc:
+        raise exc
     except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except ValueError as exc:  # pragma: no cover - 错误路径
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    path = str(Path("projects") / f"{request.name.replace('/', '_').replace('\\', '_')}.json")
-    return LoadProjectResponse(project=spec, path=path)
+        raise PersistenceError(
+            str(exc), details={"name": request.name}, http_status=404
+        ) from exc
+    except Exception as exc:
+        raise PersistenceError(str(exc)) from exc
+    path = Path(settings.projects_dir) / f"{request.name}.json"
+    return success_response(LoadProjectResponse(project=spec, path=str(path)))
 
 
 @app.get("/download")
@@ -304,12 +484,41 @@ async def download_file(path: str) -> FileResponse:
 
     file_path = Path(path)
     if not file_path.exists():
-        raise HTTPException(status_code=404, detail="文件不存在")
+        raise ValidationError("文件不存在")
     resolved = file_path.resolve()
-    allowed_roots = [Path("outputs").resolve(), Path("projects").resolve()]
+    allowed_roots = [
+        Path(settings.output_dir).resolve(),
+        Path(settings.projects_dir).resolve(),
+    ]
     if not any(str(resolved).startswith(str(root)) for root in allowed_roots):
-        raise HTTPException(status_code=400, detail="禁止访问该路径")
+        raise ValidationError("禁止访问该路径")
     return FileResponse(resolved, filename=file_path.name)
+
+
+@app.get("/healthz", response_model=HealthResponse)
+async def healthz() -> dict[str, object]:
+    """健康检查端点，供容器探针/监控系统探活。"""
+
+    ts = int(time.time() * 1000)
+    return {"ok": True, "ts": ts}
+
+
+@app.get("/version", response_model=VersionResponse)
+async def version() -> dict[str, object]:
+    """返回后端版本信息，便于客户端与监控记录。"""
+
+    return {"version": settings.api_version}
+
+
+@app.get("/config-public", response_model=ConfigPublicResponse)
+async def config_public() -> dict[str, object]:
+    """返回可公开的配置快照，不包含敏感凭据。"""
+
+    return {
+        "output_dir": settings.output_dir,
+        "projects_dir": settings.projects_dir,
+        "allowed_origins": settings.allowed_origins,
+    }
 
 
 __all__ = ["app"]
