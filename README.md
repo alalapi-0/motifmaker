@@ -78,10 +78,12 @@ Prompt → 解析层(parsing) → 骨架JSON(schema) → 动机生成(motif)
   1. Motif → 2. Melody → 3. MIDI → 4. Mix → 5. Final Track
 - Mixing step now uploads MIDI to an experimental audio renderer stub.
 
-## 🔊 Audio Rendering (Experimental)
-- POST /render/audio/ : Upload MIDI + style → returns audio URL
-- Default renderer: simulated (no real AI)
-- Future: integrate MusicGen or Mubert API
+## 🔊 Audio Rendering (Placeholder, Ready for AI)
+- Endpoint: POST /render/
+- Inputs: either upload a MIDI file (midi_file) or pass an existing path (midi_path under /outputs)
+- Output: a WAV file URL under /outputs (placeholder sine-wave render for now)
+- Frontend: Mix panel can render & preview the audio
+- Production note: replace placeholder with real AI providers (e.g. MusicGen/Mubert) in `audio_render.py::render_via_provider`
 
 ### 典型操作流程
 1. 在 Web UI 输入 Prompt 并点击“生成”。

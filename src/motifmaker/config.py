@@ -71,3 +71,7 @@ class Settings:
 
 settings = Settings.from_env()
 """全局唯一的配置实例，供其它模块引用。"""
+
+# 中文注释：输出目录常量供路由等模块引用，保持配置来源单一。
+OUTPUT_DIR = settings.output_dir
+
