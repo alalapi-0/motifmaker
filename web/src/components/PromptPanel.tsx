@@ -1,8 +1,10 @@
-import React from "react";
+import React, { useCallback } from "react";
+import { useI18n } from "../hooks/useI18n";
 
 /**
  * PromptPanel 组件：负责展示自然语言输入框与预设模板，
  * 引导用户快速填写灵感描述并触发“一键生成”流程。
+ * 在本轮中我们强化了键盘可访问性（Alt+Enter 触发生成）并适配多语言。
  */
 export interface PromptPanelProps {
   promptText: string; // 当前的自然语言 Prompt 文本。
@@ -23,50 +25,62 @@ const PromptPanel: React.FC<PromptPanelProps> = ({
   onGenerate,
   loading,
 }) => {
+  const { t } = useI18n();
+
+  const handleKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      // Alt+Enter 快捷键触发生成，便于键盘操作用户快速提交。
+      if (event.altKey && event.key === "Enter") {
+        event.preventDefault();
+        onGenerate();
+      }
+    },
+    [onGenerate]
+  );
+
   return (
-    <section className="space-y-4 rounded-lg border border-slate-700 bg-slate-900/60 p-4 shadow-sm">
-      <header className="flex items-center justify-between">
-        <h2 className="text-sm font-semibold text-slate-200">自然语言 Prompt</h2>
-        <span className="text-xs text-slate-400">描述情绪/配器/时长/段落重点</span>
+    <section className="space-y-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+      <header className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">{t("prompt.title")}</h2>
+        <span className="text-xs text-slate-500 dark:text-slate-400">{t("prompt.subtitle")}</span>
       </header>
       <div className="space-y-2">
-        <label className="text-xs text-slate-400">快速套用模板</label>
+        <label className="text-xs text-slate-500 dark:text-slate-400">{t("prompt.templates")}</label>
         <div className="flex flex-wrap gap-2">
           {PROMPT_TEMPLATES.map((template) => (
-            <sl-button
+            <button
               key={template}
-              size="small"
-              variant="text"
-              className="rounded-full bg-slate-800 px-3 text-xs text-slate-200"
+              type="button"
+              className="rounded-full border border-slate-300 px-3 py-1 text-xs text-slate-700 transition hover:border-slate-400 hover:text-slate-900 dark:border-slate-700 dark:text-slate-200 dark:hover:border-slate-500"
               onClick={() => onPromptChange(template)}
             >
               {template}
-            </sl-button>
+            </button>
           ))}
         </div>
       </div>
       <sl-textarea
         value={promptText}
         rows={4}
-        placeholder="例：城市夜景的 Lo-Fi 节奏，配器包含钢琴与弦乐"
+        placeholder={t("prompt.placeholder")}
         className="block text-sm"
-        onSlInput={(event) => {
-          // Shoelace 的 sl-input 事件中，event.target 即为 textarea 元素实例。
+        aria-label={t("prompt.title")}
+        onSlInput={(event: CustomEvent) => {
           const target = event.target as HTMLInputElement;
           onPromptChange(target.value);
         }}
+        onKeyDown={handleKeyDown}
       ></sl-textarea>
       <sl-button
         variant="primary"
         className="w-full"
         disabled={loading}
+        loading={loading}
         onClick={onGenerate}
       >
-        {loading ? "生成中..." : "一键生成"}
+        {loading ? t("prompt.generating") : t("prompt.generate")}
       </sl-button>
-      <p className="text-xs text-slate-400">
-        点击按钮后将调用后端 /generate 接口，后端完成骨架生成后会返回 MIDI 与 JSON 摘要。
-      </p>
+      <p className="text-xs text-slate-500 dark:text-slate-400">{t("prompt.keyboardHint")}</p>
     </section>
   );
 };

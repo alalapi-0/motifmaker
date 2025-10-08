@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 import "./styles.css";
+import { I18nProvider } from "./i18n"; // 引入轻量级多语言 Provider，确保所有子组件可访问 t()。
 
 /**
  * 应用入口：负责挂载 React 根节点并加载全局样式。
@@ -16,7 +17,9 @@ if (!rootElement) {
 // createRoot 会启用 React 18 的并发特性，提升交互体验。
 ReactDOM.createRoot(rootElement).render(
   <React.StrictMode>
-    {/* StrictMode 可在开发期提示潜在的副作用问题。*/}
-    <App />
+    {/* 通过 I18nProvider 包裹 App，提供 t()/setLang 等函数与状态。*/}
+    <I18nProvider>
+      <App />
+    </I18nProvider>
   </React.StrictMode>
 );
