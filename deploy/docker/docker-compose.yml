@@ -1,0 +1,37 @@
+# ==========================================
+# MotifMaker Docker Compose 示例
+# 用途：快速在单机上启动后端 API 与前端静态站点。
+# 注意：生产环境建议使用专业编排（Kubernetes/Swarm）并配置独立负载均衡与对象存储。
+# ==========================================
+
+version: '3.9'
+
+services:
+  api:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.api
+    container_name: motifmaker-api
+    env_file:
+      - ../../.env  # 从仓库根目录读取，与 deploy/env/.env.example.docker 一致
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../../outputs:/app/outputs
+      - ../../projects:/app/projects
+    restart: unless-stopped
+    # 提示：如需在生产中启用多副本，请结合外部负载均衡与共享存储。
+
+  web:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.web
+    container_name: motifmaker-web
+    depends_on:
+      - api
+    environment:
+      - VITE_API_BASE=http://localhost:8000  # 前端默认指向 api 服务，可通过 .env 覆盖
+    ports:
+      - "80:80"
+    restart: unless-stopped
+    # 提示：生产中静态资源可托管在 CDN，Compose 方案适合开发或内部演示。

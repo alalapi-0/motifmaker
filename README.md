@@ -159,6 +159,15 @@ curl http://localhost:8000/config-public
 - **浏览器为什么没声音？** 浏览器需要用户手势激活音频，请先点击播放按钮或其他控件。
 - **跨域问题？** 确保后端启用了 CORS，并检查 `VITE_API_BASE` 是否指向正确域名与端口。
 
+## 10. 部署与运维
+- **最简部署命令清单**：
+  1. `bash deploy/scripts/install_python_venv.sh`
+  2. `cp deploy/env/.env.example.server .env && vim .env`
+  3. `bash deploy/scripts/setup_systemd.sh`
+  4. 配置 Nginx 或 Caddy（示例见 `deploy/nginx/` 与 `deploy/caddy/`）
+- **健康检查**：部署完成后务必执行 `bash deploy/scripts/check_health.sh` 与 `bash deploy/scripts/smoke_test.sh`，确保链路通畅。
+- **更多细节**：包含 Docker/Compose、日志、安全实践在内的完整指南请阅读 [`deploy/README_DEPLOY.md`](deploy/README_DEPLOY.md)。
+
 ## 10. 许可与致谢
 - 许可证：MIT（详见 [LICENSE](LICENSE)）。
 - 致谢：项目使用了 FastAPI、Typer、music21、pretty_midi、Tone.js、React、TailwindCSS、Shoelace 等开源库。

@@ -1,0 +1,39 @@
+# ==========================================
+# MotifMaker 后端镜像构建文件
+# 基础镜像：python:3.10-slim，适合生产环境使用的轻量版本。
+# 注意：镜像仅包含运行后端所需依赖，不打包任何生成的二进制产物。
+# ==========================================
+
+FROM python:3.10-slim AS runtime
+
+# 设置工作目录并安装基础依赖。仅保留最小构建环境，避免镜像膨胀。
+WORKDIR /app
+
+# 安装系统级依赖（按需调整）。build-essential 可用于编译部分 Python 包，部署后可删除以缩减镜像。
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# 复制依赖文件并安装，优先利用缓存。
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+
+# 复制源代码。
+COPY src/ ./src/
+
+# 设置环境变量，值从运行时传入。
+ENV API_TITLE="MotifMaker API" \
+    API_VERSION="0.2.0" \
+    ALLOWED_ORIGINS="http://localhost" \
+    OUTPUT_DIR="/app/outputs" \
+    PROJECTS_DIR="/app/projects" \
+    RATE_LIMIT_RPS="2" \
+    LOG_LEVEL="INFO" \
+    HOST="0.0.0.0" \
+    PORT="8000"
+
+# 创建持久化目录（部署时可通过卷覆盖）。
+RUN mkdir -p /app/outputs /app/projects
+
+# 启动命令：直接使用 Uvicorn 运行 FastAPI 应用。
+CMD ["uvicorn", "motifmaker.api:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
