@@ -13,10 +13,11 @@ export interface PromptPanelProps {
   loading: boolean; // 是否处于加载状态，用于禁用按钮与展示提示。
 }
 
+// 预设模板统一改为英文描述，覆盖多种风格便于国际用户参考与快速上手。
 const PROMPT_TEMPLATES: string[] = [
-  "城市夜景、温暖而克制、B 段最高张力、现代古典+电子、约2分钟",
-  "赛博朋克追逐场景、快速节奏、带有不规则鼓组与金属合成器",
-  "日落海边、柔和摇摆、Lo-Fi 质感、加入爵士和声色彩",
+  "Dreamy lo-fi beat for a rainy evening, piano and vinyl textures, around 90 BPM",
+  "High-energy cyberpunk chase with irregular drums and metallic synths, 140 BPM",
+  "Sunset beach swing with gentle jazz harmony, relaxed groove near 110 BPM",
 ];
 
 const PromptPanel: React.FC<PromptPanelProps> = ({

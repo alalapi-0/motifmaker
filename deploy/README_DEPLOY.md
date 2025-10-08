@@ -6,6 +6,8 @@
 
 > 本文档帮助运维人员在保持核心功能不变的前提下，将 MotifMaker 后端（FastAPI）与前端（Vite+React）安全、稳定地部署到不同平台。
 
+> As of this release, the MotifMaker web interface is in English only. To localize in the future, extend the i18n dictionary before rebuilding the web bundle.
+
 ## 1. 部署路径选择对比
 
 | 场景 | 优点 | 适用人群 | 备注 |

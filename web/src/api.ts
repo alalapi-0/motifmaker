@@ -189,7 +189,8 @@ async function postJson<T>(
   try {
     data = await response.json();
   } catch (error) {
-    throw new ApiError("响应解析失败，请检查网络或后端日志", response.status);
+    // API 返回体解析失败时统一输出英文提示，避免前端弹窗出现中文残留。
+    throw new ApiError("Failed to parse response body. Please check the network or backend logs.", response.status);
   }
 
   const parsed = data as
@@ -201,7 +202,7 @@ async function postJson<T>(
       ? parsed.error
       : { message: `HTTP ${response.status}`, code: undefined };
     throw new ApiError(
-      errorPayload.message ?? "未知错误",
+      errorPayload.message ?? "Unknown error",
       response.status,
       errorPayload.code,
       errorPayload.details

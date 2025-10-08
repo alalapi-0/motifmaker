@@ -10,14 +10,14 @@ export interface TopStatusBarProps {
 }
 
 /**
- * TopStatusBar 组件：展示后端健康状态、版本信息、接口地址以及语言/主题切换。
+ * TopStatusBar 组件：展示后端健康状态、版本信息、接口地址以及主题切换。
  * 设计重点：
  * 1. useEffect 内部执行 30 秒轮询，并在返回函数中清理定时器与 AbortController，避免内存泄漏；
  * 2. 利用 useRef 记录组件是否已卸载，防止异步请求返回后再 setState；
- * 3. 通过 useI18n 提供的 setLang 和 t() 完成国际化切换，并将语言写入 localStorage。
+ * 3. 语言切换暂时下线，仅展示固定“English Only”提示；未来可恢复多语言时再启用下拉框。
  */
 const TopStatusBar: React.FC<TopStatusBarProps> = ({ busy, lastError, theme, onThemeChange }) => {
-  const { lang, setLang, t } = useI18n();
+  const { t } = useI18n();
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [versionInfo, setVersionInfo] = useState<string | null>(null);
   const [publicConfig, setPublicConfig] = useState<ConfigPublicResponse | null>(null);
@@ -146,20 +146,11 @@ const TopStatusBar: React.FC<TopStatusBarProps> = ({ busy, lastError, theme, onT
           >
             {t("status.refresh")}
           </button>
-          <label className="flex items-center gap-2">
+          <div className="flex items-center gap-2">
             <span className="text-slate-500 dark:text-slate-400">{t("status.language")}</span>
-            <sl-select
-              value={lang}
-              className="w-28"
-              onSlChange={(event: CustomEvent) => {
-                const target = event.target as HTMLSelectElement;
-                setLang(target.value as "zh" | "en");
-              }}
-            >
-              <sl-option value="zh">中文</sl-option>
-              <sl-option value="en">English</sl-option>
-            </sl-select>
-          </label>
+            {/* 当前版本固定为英文模式，未来如需多语言支持，可重新启用语言切换开关。*/}
+            <span className="text-sm opacity-70">{t("status.englishOnly")}</span>
+          </div>
           <label className="flex items-center gap-2">
             <span className="text-slate-500 dark:text-slate-400">{t("status.theme")}</span>
             <sl-switch

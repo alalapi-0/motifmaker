@@ -43,7 +43,9 @@ interface LogEntry {
 const VIEW_STORAGE_KEY = "motifmaker.viewSettings";
 const THEME_STORAGE_KEY = "motifmaker.theme";
 
-const DEFAULT_PROMPT = "城市夜景、温暖而克制、B 段最高张力、现代古典+电子、约2分钟";
+// 统一默认 Prompt 为英文示例，避免初次加载时出现中文提示文案。
+const DEFAULT_PROMPT =
+  "Gentle night cityscape, warm but restrained, B section peak tension, modern classical + electronic, about 2 minutes";
 
 /**
  * App 组件：整合前端所有功能模块，管理请求状态与布局。
@@ -52,7 +54,7 @@ const DEFAULT_PROMPT = "城市夜景、温暖而克制、B 段最高张力、现
  * - 通过 AbortController 及请求状态避免竞态，保障 UI 可预期。
  */
 const App: React.FC = () => {
-  const { t, lang } = useI18n();
+  const { t } = useI18n();
   const [promptText, setPromptText] = useState(DEFAULT_PROMPT);
   const [baseSpec, setBaseSpec] = useState<ProjectSpec | null>(null); // 后端权威 ProjectSpec，表格编辑直接更新该状态。
   const [lastRender, setLastRender] = useState<RenderSuccess | null>(null); // 最近一次渲染结果，驱动下载与播放器。
@@ -428,21 +430,20 @@ const App: React.FC = () => {
   );
 
   const handleExportView = useCallback(async () => {
-    // 导出视图设置：写入 Piano-Roll 缩放、主题与语言到 localStorage，便于再次加载。
+    // 导出视图设置：仅写入 Piano-Roll 缩放与主题偏好；语言固定为英文无需持久化。
     if (typeof window === "undefined") return;
     setExportingView(true);
     try {
       const payload = {
         pianoScale,
         theme,
-        lang,
       };
       window.localStorage.setItem(VIEW_STORAGE_KEY, JSON.stringify(payload));
       appendLog("log.viewSaved", "success");
     } finally {
       setExportingView(false);
     }
-  }, [appendLog, lang, pianoScale, theme]);
+  }, [appendLog, pianoScale, theme]);
 
   const handlePlayerProgress = useCallback((time: number) => {
     setPlaybackTime(time);

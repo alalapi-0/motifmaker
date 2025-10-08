@@ -11,13 +11,14 @@ import { I18nProvider } from "./i18n"; // 引入轻量级多语言 Provider，�
 const rootElement = document.getElementById("root");
 
 if (!rootElement) {
-  throw new Error("未找到 #root 节点，无法启动前端应用。");
+  // 运行时异常也统一改为英文提示，避免打包后仍出现中文文案。
+  throw new Error("Failed to locate #root element. Unable to bootstrap the web app.");
 }
 
 // createRoot 会启用 React 18 的并发特性，提升交互体验。
 ReactDOM.createRoot(rootElement).render(
   <React.StrictMode>
-    {/* 通过 I18nProvider 包裹 App，提供 t()/setLang 等函数与状态。*/}
+    {/* 通过 I18nProvider 包裹 App，提供 t() 等接口；当前仅启用英文语言包以统一界面。*/}
     <I18nProvider>
       <App />
     </I18nProvider>
