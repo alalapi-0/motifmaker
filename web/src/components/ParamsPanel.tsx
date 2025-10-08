@@ -1,166 +1,178 @@
-import React from "react";
-import clsx from "clsx";
+import React, { useMemo } from "react";
 import { ParamOverrides, ProjectSpec } from "../api";
+import { useI18n } from "../hooks/useI18n";
 
-/**
- * ParamsPanel 组件：展示节奏、调性、配器等参数的临时覆盖控件。
- * 这些参数不会直接修改当前 ProjectSpec，而是在提交请求时由 App 合并，
- * 这样可以保持前端灵活性，同时确保后端拥有最终解释权。
- */
 export interface ParamsPanelProps {
   projectSpec: ProjectSpec | null; // 当前后端下发的规格，可为空。
   overrides: ParamOverrides; // 用户在前端调整的临时参数。
   onOverridesChange: (next: ParamOverrides) => void; // 通知上层更新覆盖值。
+  onResetOverrides: () => void; // 恢复为最新解析结果。
+  disabled?: boolean; // 当请求执行中时禁用控件。
 }
 
-const INSTRUMENT_OPTIONS = [
-  "piano",
-  "strings",
-  "synth pad",
-  "drums",
-  "bass",
-  "woodwinds",
-];
-
+/**
+ * ParamsPanel 组件：展示并修改 Tempo、拍号、调式、配器与和声选项等覆盖参数。
+ * - 重置按钮可撤销所有覆盖并恢复为最新解析结果；
+ * - Slider/Select/Input 均补充了键盘操作提示，符合可访问性要求；
+ * - instrumentation 文本框采用逗号分隔，便于快速批量编辑。
+ */
 const ParamsPanel: React.FC<ParamsPanelProps> = ({
   projectSpec,
   overrides,
   onOverridesChange,
+  onResetOverrides,
+  disabled,
 }) => {
-  // 帮助函数：生成新的覆盖对象，保持不可变数据结构。
-  const setOverride = <K extends keyof ParamOverrides>(key: K, value: ParamOverrides[K]) => {
-    onOverridesChange({
-      ...overrides,
-      [key]: value,
-    });
-  };
+  const { t } = useI18n();
 
-  const effectiveTempo = overrides.tempo_bpm ?? projectSpec?.tempo_bpm ?? 100; // 展示值优先使用覆盖，其次是后端原值，最后兜底默认。
+  const effectiveTempo = overrides.tempo_bpm ?? projectSpec?.tempo_bpm ?? 100;
   const effectiveMeter = overrides.meter ?? projectSpec?.meter ?? "4/4";
   const effectiveKey = overrides.key ?? projectSpec?.key ?? "C";
   const effectiveMode = overrides.mode ?? projectSpec?.mode ?? "major";
-  const effectiveInstrumentation = overrides.instrumentation ?? projectSpec?.instrumentation ?? ["piano"];
-  const useSecondaryDominant = overrides.harmony_options?.use_secondary_dominant ?? projectSpec?.harmony_options?.use_secondary_dominant ?? false;
+  const effectiveInstrumentation = overrides.instrumentation ?? projectSpec?.instrumentation ?? [];
+  const useSecondaryDominant =
+    overrides.harmony_options?.use_secondary_dominant ?? projectSpec?.use_secondary_dominant ?? false;
+
+  const instrumentationInput = useMemo(
+    () => effectiveInstrumentation.join(", "),
+    [effectiveInstrumentation]
+  );
 
   return (
-    <section className="space-y-4 rounded-lg border border-slate-700 bg-slate-900/60 p-4 shadow-sm">
-      <header className="space-y-1">
-        <h2 className="text-sm font-semibold text-slate-200">参数覆盖</h2>
-        <p className="text-xs text-slate-400">
-          下方调节项只影响下一次请求的 payload，后端会在生成时合并这些覆盖值并进行合法性校验。
-        </p>
+    <section className="space-y-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+      <header className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">{t("params.title")}</h2>
+          <p className="text-xs text-slate-500 dark:text-slate-400">{t("params.subtitle")}</p>
+        </div>
+        <button
+          type="button"
+          className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 transition hover:border-slate-400 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:text-slate-200 dark:hover:border-slate-500"
+          onClick={onResetOverrides}
+          disabled={disabled}
+        >
+          {t("params.reset")}
+        </button>
       </header>
 
-      <div className="space-y-2">
-        <label className="text-xs font-medium text-slate-300">Tempo (BPM)</label>
-        <sl-slider
-          min={60}
-          max={140}
-          step={1}
-          value={effectiveTempo}
-          onSlChange={(event) => {
-            // Shoelace Slider 的 value 为字符串或数字，统一转为数字存储。
-            const target = event.target as HTMLInputElement;
-            setOverride("tempo_bpm", Number(target.value));
-          }}
-        ></sl-slider>
-        <span className="text-xs text-slate-400">当前：{effectiveTempo} BPM</span>
-      </div>
-
-      <div className="grid gap-3 sm:grid-cols-2">
-        <label className="space-y-2 text-xs text-slate-300">
-          <span className="font-medium">拍号 (Meter)</span>
-          <sl-select
-            value={effectiveMeter}
-            onSlChange={(event) => {
-              const target = event.target as HTMLSelectElement;
-              setOverride("meter", target.value);
-            }}
-          >
-            <sl-option value="4/4">4/4</sl-option>
-            <sl-option value="3/4">3/4</sl-option>
-          </sl-select>
-        </label>
-
-        <label className="space-y-2 text-xs text-slate-300">
-          <span className="font-medium">调性 (Key / Mode)</span>
-          <div className="grid grid-cols-2 gap-2">
-            <sl-input
-              value={effectiveKey}
-              placeholder="C"
-              onSlChange={(event) => {
-                const target = event.target as HTMLInputElement;
-                setOverride("key", target.value.toUpperCase());
-              }}
-            ></sl-input>
-            <sl-select
-              value={effectiveMode}
-              onSlChange={(event) => {
-                const target = event.target as HTMLSelectElement;
-                setOverride("mode", target.value);
-              }}
-            >
-              <sl-option value="major">Major</sl-option>
-              <sl-option value="minor">Minor</sl-option>
-              <sl-option value="dorian">Dorian</sl-option>
-            </sl-select>
-          </div>
-        </label>
-      </div>
-
-      <div className="space-y-2">
-        <span className="text-xs font-medium text-slate-300">Instrumentation 配器选择</span>
-        <div className="flex flex-wrap gap-2">
-          {INSTRUMENT_OPTIONS.map((instrument) => {
-            const checked = effectiveInstrumentation.includes(instrument);
-            return (
-              <label
-                key={instrument}
-                className={clsx(
-                  "flex items-center gap-2 rounded-full border px-3 py-1 text-xs",
-                  checked ? "border-cyan-400 bg-cyan-500/20" : "border-slate-700"
-                )}
-              >
-                <sl-checkbox
-                  checked={checked}
-                  onSlChange={(event) => {
-                    const target = event.target as HTMLInputElement;
-                    const next = new Set(effectiveInstrumentation);
-                    if (target.checked) {
-                      next.add(instrument);
-                    } else {
-                      next.delete(instrument);
-                    }
-                    setOverride("instrumentation", Array.from(next));
-                  }}
-                ></sl-checkbox>
-                {instrument}
-              </label>
-            );
-          })}
-        </div>
-        <p className="text-xs text-slate-400">
-          覆盖配器时仅调整提交给后端的列表，后端仍会根据实际可用音色进行裁剪或补全。
-        </p>
-      </div>
-
-      <div className="rounded-md bg-slate-800/60 p-3 text-xs text-slate-300">
-        <label className="flex items-center gap-2">
-          <sl-switch
-            checked={useSecondaryDominant}
-            onSlChange={(event) => {
+      <div className="space-y-3">
+        <label className="block text-xs text-slate-500 dark:text-slate-400">
+          <span className="mb-1 block font-medium text-slate-900 dark:text-slate-200">{t("params.tempo")}</span>
+          <sl-slider
+            min={40}
+            max={220}
+            step={1}
+            value={effectiveTempo}
+            disabled={disabled}
+            aria-label={t("params.tempo")}
+            onSlChange={(event: CustomEvent) => {
               const target = event.target as HTMLInputElement;
-              setOverride("harmony_options", {
-                ...overrides.harmony_options,
-                use_secondary_dominant: target.checked,
+              onOverridesChange({
+                ...overrides,
+                tempo_bpm: Number(target.value),
               });
             }}
-          ></sl-switch>
-          启用二级属和声（useSecondaryDominant）
+          ></sl-slider>
+          {/* Shoelace Slider 默认支持左右方向键按步长调整，提示文本在段落中说明。*/}
+          <span className="mt-1 block text-[11px] text-slate-400 dark:text-slate-500">{effectiveTempo} BPM · {t("params.sliderAria")}</span>
         </label>
-        <p className="mt-2 text-[11px] text-slate-400">
-          说明：若开启该选项，后端会优先尝试在和声生成时插入二级属功能；若后端认为当前调性不适合，会自动忽略。
-        </p>
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className="space-y-1 text-xs text-slate-500 dark:text-slate-400">
+            <span className="font-medium text-slate-900 dark:text-slate-200">{t("params.meter")}</span>
+            <sl-select
+              value={effectiveMeter}
+              disabled={disabled}
+              onSlChange={(event: CustomEvent) => {
+                const target = event.target as HTMLSelectElement;
+                onOverridesChange({
+                  ...overrides,
+                  meter: target.value,
+                });
+              }}
+            >
+              <sl-option value="4/4">4/4</sl-option>
+              <sl-option value="3/4">3/4</sl-option>
+            </sl-select>
+          </label>
+
+          <div className="grid grid-cols-2 gap-2 text-xs text-slate-500 dark:text-slate-400">
+            <label className="space-y-1">
+              <span className="font-medium text-slate-900 dark:text-slate-200">{t("params.key")}</span>
+              <sl-input
+                value={effectiveKey}
+                disabled={disabled}
+                onSlChange={(event: CustomEvent) => {
+                  const target = event.target as HTMLInputElement;
+                  onOverridesChange({
+                    ...overrides,
+                    key: target.value.toUpperCase(),
+                  });
+                }}
+              ></sl-input>
+            </label>
+            <label className="space-y-1">
+              <span className="font-medium text-slate-900 dark:text-slate-200">{t("params.mode")}</span>
+              <sl-select
+                value={effectiveMode}
+                disabled={disabled}
+                onSlChange={(event: CustomEvent) => {
+                  const target = event.target as HTMLSelectElement;
+                  onOverridesChange({
+                    ...overrides,
+                    mode: target.value,
+                  });
+                }}
+              >
+                <sl-option value="major">Major</sl-option>
+                <sl-option value="minor">Minor</sl-option>
+                <sl-option value="dorian">Dorian</sl-option>
+              </sl-select>
+            </label>
+          </div>
+        </div>
+
+        <label className="block text-xs text-slate-500 dark:text-slate-400">
+          <span className="mb-1 block font-medium text-slate-900 dark:text-slate-200">{t("params.instrumentation")}</span>
+          <sl-textarea
+            value={instrumentationInput}
+            placeholder="piano, strings, bass"
+            disabled={disabled}
+            onSlChange={(event: CustomEvent) => {
+              const target = event.target as HTMLTextAreaElement;
+              const raw = target.value
+                .split(",")
+                .map((item) => item.trim())
+                .filter(Boolean);
+              onOverridesChange({
+                ...overrides,
+                instrumentation: raw.length > 0 ? raw : undefined,
+              });
+            }}
+          ></sl-textarea>
+          <span className="mt-1 block text-[11px] text-slate-400 dark:text-slate-500">{t("params.instrumentationHint")}</span>
+        </label>
+
+        <div className="rounded-md border border-slate-200 bg-slate-100 p-3 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">
+          <label className="flex items-center gap-2">
+            <span className="font-medium text-slate-900 dark:text-slate-200">{t("params.harmonyOptions")}</span>
+            <sl-switch
+              checked={useSecondaryDominant}
+              disabled={disabled}
+              onSlChange={(event: CustomEvent) => {
+                const target = event.target as HTMLInputElement;
+                onOverridesChange({
+                  ...overrides,
+                  harmony_options: {
+                    ...overrides.harmony_options,
+                    use_secondary_dominant: target.checked,
+                  },
+                });
+              }}
+            ></sl-switch>
+            <span>{t("params.secondaryDominant")}</span>
+          </label>
+        </div>
       </div>
     </section>
   );

@@ -32,11 +32,16 @@ web/
 │  ├─ api.ts               # 封装与 FastAPI 通信的请求函数
 │  ├─ styles.css           # TailwindCSS 扩展样式
 │  └─ components/
-│     ├─ PromptPanel.tsx   # Prompt 输入、生成按钮与参数预设
-│     ├─ ParamsPanel.tsx   # Tempo、Meter、Key、Mode、Instrumentation、Harmony 控件
-│     ├─ FormTable.tsx     # 表格形式的段落编辑、局部再生成与动机冻结
-│     ├─ Player.tsx        # 基于 Tone.js 的播放器与音量控制
-│     └─ DownloadBar.tsx   # 下载 JSON/MIDI 与保存工程的入口
+│     ├─ PromptPanel.tsx   # Prompt 输入、生成按钮与参数预设（支持多语言与 Alt+Enter 快捷键）
+│     ├─ ParamsPanel.tsx   # Tempo/Meter/Key/Mode/Instrumentation/Secondary Dominant 控件
+│     ├─ FormTable.tsx     # 段落表格编辑、键盘导航、批量动机冻结与再生模式切换
+│     ├─ Player.tsx        # 基于 Tone.js 的播放器，支持 seek/loop 与 Piano-Roll 联动
+│     ├─ PianoRoll.tsx     # Canvas Piano-Roll 可视化，提供缩放、拖拽、hover 提示
+│     ├─ DownloadBar.tsx   # 下载 JSON/MIDI、复制骨架、导出视图设置与工程保存
+│     └─ TopStatusBar.tsx  # 顶部状态条，轮询健康检查、语言/主题切换
+│  ├─ hooks/
+│  │  └─ useI18n.ts        # 轻量 i18n Hook，封装上下文读取
+│  └─ i18n.ts              # 中英文词典、Provider 与 localStorage 持久化逻辑
 ├─ index.html              # Vite HTML 模板
 ├─ vite.config.ts          # Vite 配置
 └─ tailwind.config.cjs     # TailwindCSS 配置
@@ -45,8 +50,19 @@ web/
 ## 使用示例
 1. 在 Prompt 输入框填写描述（例如“城市夜景 Lo-Fi”），点击“生成”。
 2. 在左侧参数面板调整 Tempo、拍号、调性、配器或和声选项，必要时触发重新渲染。
-3. 在 FormTable 中修改段落小节数、张力，或选择局部再生成 / 冻结动机。
-4. 使用播放器试听生成结果，确认后点击下载获取 MIDI/JSON，或保存工程以便日后加载。
+3. 在 FormTable 中使用方向键移动、Enter 编辑、Esc 取消，必要时勾选动机后点击“冻结选中的动机”。
+4. Piano-Roll 中拖动滚动条或点击任意位置可与播放器同步，适合定位特定小节。
+5. 使用播放器试听生成结果，确认后点击下载获取 MIDI/JSON，或保存工程以便日后加载。
 
 ## 部署提示
-构建完成后，可将 `dist/` 上传至任意静态托管平台（如 Vercel、Netlify），并通过 `VITE_API_BASE` 指向线上 FastAPI 服务。
+构建完成后，可将 `dist/` 上传至任意静态托管平台（如 Vercel、Netlify），并通过 `VITE_API_BASE` 指向线上 FastAPI 服务。仓库已忽略 `web/dist/`，请勿提交构建产物。
+
+## i18n 使用方式
+- 所有 UI 文案需通过 `useI18n()` 提供的 `t(key)` 获取；若需要插值，可传入字典 `t(key, { count: 4 })`。
+- 当前实现为轻量级字典，后续若要接入 i18next，可在 `i18n.ts` 中替换 Provider 并保留 localStorage 存储约定。
+- 语言切换会同步更新 `<html lang>` 属性，并在顶部状态条即时显示。
+
+## 视图设置与主题
+- 主题（浅色/深色）与 Piano-Roll 缩放倍率在用户操作时写入 `localStorage`，可通过下载栏的“导出当前视图设置”手动备份。
+- `TopStatusBar` 会轮询 `/healthz`、`/version` 与 `/config-public`，每 30 秒刷新一次状态，组件卸载时会自动清理定时器与 AbortController。
+- Player 在完成外部 seek 后会调用 `onSeekApplied` 通知上层清理状态，避免多次重复定位。

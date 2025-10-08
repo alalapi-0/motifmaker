@@ -6,8 +6,11 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "echo 'no tests yet (TODO: add Vitest suite)'"
+    "lint": "echo \"No linter configured yet\"",
+    "typecheck": "tsc --noEmit",
+    "test": "echo \"No tests yet - run manual checks\""
   },
+  "_manualCheck": "手工自检：1）npm run dev 启动开发服务器；2）在浏览器完成生成、局部再生、动机冻结；3）验证播放器与 Piano-Roll 联动、语言与主题切换；4）尝试保存/载入工程与导出视图设置。",
   "dependencies": {
     "@shoelace-style/shoelace": "^2.15.1",
     "@tonejs/midi": "^2.0.28",
