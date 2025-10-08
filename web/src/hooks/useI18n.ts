@@ -8,7 +8,8 @@ import I18nContext, { TranslationKey, Lang } from "../i18n";
 export function useI18n() {
   const context = useContext(I18nContext);
   if (!context) {
-    throw new Error("useI18n 必须在 <I18nProvider> 内使用");
+    // 为保持错误信息英文化，仅在注释中说明原因，避免 UI 出现中文残留。
+    throw new Error("useI18n must be used within <I18nProvider>.");
   }
   return context;
 }

@@ -1,5 +1,9 @@
 # Motifmaker
 
+## 🌍 Language
+Current UI language: **English Only**
+(All labels, tooltips, and prompts have been unified in English for consistency and better global readability.)
+
 ## 1. 项目简介
 Motifmaker 是一个分层式音乐生成原型，支持从自然语言 Prompt → 骨架 JSON → 动机 → 段落展开 → 和声 → 渲染 → MIDI → Web UI 试听与下载的全流程。系统强调模块解耦，既适合研究实验，也能拓展成音乐创作工具。
 
@@ -56,12 +60,13 @@ Prompt → 解析层(parsing) → 骨架JSON(schema) → 动机生成(motif)
 3. 浏览器访问 [http://localhost:5173](http://localhost:5173)。如需指向远程后端，可在启动前设置 `VITE_API_BASE=http://后端地址:端口`。
 
 ### 前端 UI 使用说明
+- The interface language has been standardized to English. The i18n infrastructure remains intact for future translation.
 - 见 Piano-Roll 可视化与参数面板。
-- 顶部状态条可切换中英文语言、深浅主题，并查看后端健康状态与接口地址。
+- 顶部状态条提供固定的 “English Only” 提示与主题切换按钮，可查看后端健康状态与接口地址。
 - Prompt 面板支持 Alt+Enter 快速触发生成，参数覆盖区可随时重置为后端最新解析结果。
 - 曲式表格支持键盘导航：方向键移动单元格、Enter 编辑、Esc 取消，新增的冻结列可批量勾选后点击“冻结选中的动机”。
 - 播放器与 Piano-Roll 联动：拖动进度条或点击 Piano-Roll 任意位置都会同步播放指针，循环模式可在播放器右侧开关。
-- “复制骨架 JSON” 与 “导出当前视图设置” 会分别写入剪贴板与 localStorage，导出内容包含 Piano-Roll 缩放、主题与语言偏好。
+- “复制骨架 JSON” 与 “导出当前视图设置” 会分别写入剪贴板与 localStorage，导出内容包含 Piano-Roll 缩放与主题偏好（语言固定为英文）。
 - 常见错误提示：
   - 若播放器无声，多半是浏览器自动静音限制；请先点击播放键并确认系统音量。
   - 若请求失败，Shoelace `<sl-alert>` 会在顶部出现错误提示，常见原因包括跨域配置或后端服务未启动。
