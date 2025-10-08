@@ -18,7 +18,13 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .audio_render import router as audio_render_router
-from .config import settings, OUTPUT_DIR
+from .config import (
+    AUDIO_PROVIDER,
+    DAILY_FREE_QUOTA,
+    OUTPUT_DIR,
+    USAGE_DB_PATH,
+    settings,
+)
 from .errors import (
     MMError,
     PersistenceError,
@@ -30,6 +36,7 @@ from .errors import (
 from .logging_setup import get_logger, setup_logging
 from .parsing import parse_natural_prompt
 from .persistence import load_project_json, save_project_json
+from .quota import init_usage_db
 from .ratelimit import rate_limiter
 from .render import RenderResult, render_project
 from .schema import ProjectSpec, default_from_prompt_meta
@@ -51,6 +58,8 @@ app.add_middleware(
 
 # 中文注释：挂载静态目录前确保输出路径存在，避免启动时因目录缺失而失败。
 ensure_directory(OUTPUT_DIR)
+# 中文注释：初始化每日配额数据库，当前实现使用本地 SQLite，生产建议替换为集中式存储。
+init_usage_db(USAGE_DB_PATH)
 # 中文注释：开发阶段直接挂载 outputs 目录用于提供 MIDI/WAV 下载；生产环境建议使用 Nginx/Caddy 等专业静态服务。
 app.mount("/outputs", StaticFiles(directory=OUTPUT_DIR), name="outputs")
 
@@ -565,6 +574,8 @@ async def config_public() -> dict[str, object]:
         "output_dir": settings.output_dir,
         "projects_dir": settings.projects_dir,
         "allowed_origins": settings.allowed_origins,
+        "audio_provider": AUDIO_PROVIDER,
+        "daily_free_quota": DAILY_FREE_QUOTA,
     }
 
 

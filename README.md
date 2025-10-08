@@ -78,12 +78,34 @@ Prompt → 解析层(parsing) → 骨架JSON(schema) → 动机生成(motif)
   1. Motif → 2. Melody → 3. MIDI → 4. Mix → 5. Final Track
 - Mixing step now uploads MIDI to an experimental audio renderer stub.
 
-## 🔊 Audio Rendering (Placeholder, Ready for AI)
-- Endpoint: POST /render/
-- Inputs: either upload a MIDI file (midi_file) or pass an existing path (midi_path under /outputs)
-- Output: a WAV file URL under /outputs (placeholder sine-wave render for now)
-- Frontend: Mix panel can render & preview the audio
-- Production note: replace placeholder with real AI providers (e.g. MusicGen/Mubert) in `audio_render.py::render_via_provider`
+## 🔊 Audio Rendering (Providers)
+- **Providers**：通过 `.env` 中的 `AUDIO_PROVIDER` 切换，当前支持：
+  - `placeholder`：本地正弦波模拟渲染，开发调试零成本；
+  - `hf`：调用 Hugging Face Inference API（需 `HF_API_TOKEN` 与 `HF_MODEL`）；
+  - `replicate`：调用 Replicate Prediction API（需 `REPLICATE_API_TOKEN` 与 `REPLICATE_MODEL`）。
+- **配置示例**（节选自 `.env.example`，请勿将真实 Token 入库）：
+
+  ```ini
+  AUDIO_PROVIDER=hf
+  HF_API_TOKEN=hf_xxx                     # Hugging Face 个人 Token
+  HF_MODEL=facebook/musicgen-small        # 可替换为私有端点
+  RENDER_TIMEOUT_SEC=120                  # 推理超时（秒）
+  RENDER_MAX_SECONDS=30                   # 限制生成音频最长时长
+  DAILY_FREE_QUOTA=10                     # 每日免费额度
+  PRO_USER_EMAILS=vip@example.com,team@studio.com
+  ```
+
+- **成本与配额策略**：
+  - 免费用户：按 IP/Email 统计，每日 `DAILY_FREE_QUOTA` 次免费渲染；
+  - Pro 用户：将邮箱加入 `PRO_USER_EMAILS` 白名单，可跳过免费额度限制；
+  - 计数存储在本地 `var/usage.db`（SQLite），生产部署请替换为集中式存储以便扩容。
+- **风险提示**：
+  - 外部模型可能返回 429/5xx，后端已内置指数退避与 504 超时保护；
+  - 不同 Provider 输出格式可能为 WAV/MP3，请在消费端处理多种音频类型；
+  - 超时或模型加载（202 Accepted）会触发重试，必要时可增加 timeout。
+- **安全提示**：
+  - API Token 仅存放在 `.env`，务必加入 `.gitignore`，禁止提交到仓库；
+  - 生产部署建议将生成的音频上传到对象存储/CDN，由静态链接供前端访问。
 
 ### 典型操作流程
 1. 在 Web UI 输入 Prompt 并点击“生成”。

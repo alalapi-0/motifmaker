@@ -122,6 +122,8 @@ export interface ConfigPublicResponse {
   output_dir: string;
   projects_dir: string;
   allowed_origins: string[];
+  audio_provider: string;
+  daily_free_quota: number;
 }
 
 /**
@@ -422,12 +424,16 @@ export async function configPublic(
     output_dir: string;
     projects_dir: string | string[];
     allowed_origins: string[];
+    audio_provider?: string;
+    daily_free_quota?: number;
   }>("/config-public", signal);
   return {
     ...result,
     projects_dir: Array.isArray(result.projects_dir)
       ? result.projects_dir.join(", ")
       : result.projects_dir,
+    audio_provider: result.audio_provider ?? "placeholder",
+    daily_free_quota: result.daily_free_quota ?? 0,
   };
 }
 

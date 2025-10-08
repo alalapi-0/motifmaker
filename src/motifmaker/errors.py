@@ -57,6 +57,14 @@ class RateLimitError(MMError):
     default_message = "请求过于频繁，请稍后重试"
 
 
+class ConfigError(MMError):
+    """配置缺失或不合法时抛出的异常，通常用于第三方凭据校验。"""
+
+    code = "E_CONFIG"
+    http_status = 400
+    default_message = "configuration error"
+
+
 class PersistenceError(MMError):
     """项目持久化过程出现读写问题时抛出，默认 500。"""
 
@@ -71,6 +79,14 @@ class RenderError(MMError):
     code = "E_RENDER"
     http_status = 500
     default_message = "渲染失败"
+
+
+class RenderTimeout(MMError):
+    """外部渲染超时时抛出的异常，HTTP 状态码使用 504。"""
+
+    code = "E_RENDER_TIMEOUT"
+    http_status = 504
+    default_message = "render request timed out"
 
 
 class InternalServerError(MMError):
@@ -94,8 +110,10 @@ __all__ = [
     "MMError",
     "ValidationError",
     "RateLimitError",
+    "ConfigError",
     "PersistenceError",
     "RenderError",
+    "RenderTimeout",
     "InternalServerError",
     "error_response",
 ]
