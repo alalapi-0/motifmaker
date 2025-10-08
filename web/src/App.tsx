@@ -3,15 +3,9 @@ import StepIndicator, { StepDefinition } from "./components/StepIndicator";
 import MotifPanel from "./components/steps/MotifPanel";
 import MelodyPanel from "./components/steps/MelodyPanel";
 import MidiPanel from "./components/steps/MidiPanel";
-import MixPanel, { MixSettings } from "./components/steps/MixPanel";
+import MixPanel, { StyleOption } from "./components/steps/MixPanel";
 import RenderPanel from "./components/steps/RenderPanel";
-import {
-  generate,
-  renderProject,
-  renderAudioPreview,
-  resolveAssetUrl,
-  RenderSuccess,
-} from "./api";
+import { generate, renderProject, resolveAssetUrl, RenderSuccess } from "./api";
 
 /**
  * App 组件：Round E 金属主题界面与分阶段音乐生成流程的核心容器。
@@ -45,17 +39,19 @@ const App: React.FC = () => {
   const [arrangementError, setArrangementError] = useState<string | null>(null); // MIDI 渲染错误。
   const [midiUrl, setMidiUrl] = useState<string | null>(null); // 最新的 MIDI 下载地址。
 
-  const [mixSettings, setMixSettings] = useState<MixSettings>({
-    reverb: 35,
-    pan: 0,
-    volume: -6,
-    intensity: 55,
-    preset: "metal-suite",
-    style: "cinematic",
-  }); // 混音参数集合。
-  const [mixLoading, setMixLoading] = useState(false); // 混音阶段加载态。
-  const [mixError, setMixError] = useState<string | null>(null); // 混音阶段错误提示。
-  const [audioUrl, setAudioUrl] = useState<string | null>(null); // 最终音频地址。
+  const [mixStyle, setMixStyle] = useState<StyleOption>("cinematic"); // 混音阶段选择的渲染风格。
+  const [mixIntensity, setMixIntensity] = useState<number>(0.5); // 占位渲染强度，范围 0..1。
+  const [audioState, setAudioState] = useState<
+    | {
+        resolvedUrl: string;
+        rawUrl: string;
+        renderer: string;
+        duration: number;
+        style: string;
+        intensity: number;
+      }
+    | null
+  >(null); // 音频渲染结果状态。
 
   const [projectId] = useState<string>(() => {
     // 使用时间戳生成项目 ID，保证界面刷新前保持稳定。
@@ -74,6 +70,7 @@ const App: React.FC = () => {
       const result = await generate(prompt);
       setMotifState(result);
       setMidiUrl(resolveAssetUrl(result.midi));
+      setAudioState(null);
       setStep(2);
     } catch (error) {
       const message = (error as Error).message || "Failed to generate motif. Please retry.";
@@ -99,6 +96,7 @@ const App: React.FC = () => {
       const result = await renderProject(motifState.project);
       setMotifState(result);
       setMidiUrl(resolveAssetUrl(result.midi));
+      setAudioState(null);
       setStep(4);
     } catch (error) {
       const message = (error as Error).message || "Failed to arrange MIDI. Please try again.";
@@ -108,60 +106,25 @@ const App: React.FC = () => {
     }
   }, [motifState]);
 
-  const handleMixRender = useCallback(async () => {
-    if (!midiUrl) {
-      setMixError("Arrange a MIDI file before mixing.");
-      return;
-    }
-    setMixLoading(true);
-    setMixError(null);
-    setAudioUrl(null);
-    try {
-      const midiResponse = await fetch(midiUrl);
-      if (!midiResponse.ok) {
-        throw new Error("Unable to fetch the MIDI file for rendering.");
-      }
-      const midiBlob = await midiResponse.blob();
-      const midiName = (() => {
-        try {
-          const parsed = new URL(midiUrl);
-          const candidate = parsed.pathname.split("/").pop();
-          if (candidate && candidate.trim().length > 0) {
-            return candidate;
-          }
-        } catch (error) {
-          // ignore URL parsing error and fallback to stored spec path
-        }
-        const fallback = motifState?.midi?.split(/[/\\]/).pop();
-        return fallback && fallback.length > 0 ? fallback : "mix_render.mid";
-      })();
-      const midiFile = new File([midiBlob], midiName, {
-        type: midiResponse.headers.get("Content-Type") ?? "audio/midi",
+  // 中文注释：混音阶段完成占位音频渲染后，保存返回的元数据并跳转到最终步骤。
+  const handleAudioRendered = useCallback(
+    (payload: {
+      resolvedUrl: string;
+      rawUrl: string;
+      meta: { renderer: string; duration_sec: number; style: string; intensity: number };
+    }) => {
+      setAudioState({
+        resolvedUrl: payload.resolvedUrl,
+        rawUrl: payload.rawUrl,
+        renderer: payload.meta.renderer,
+        duration: payload.meta.duration_sec,
+        style: payload.meta.style,
+        intensity: payload.meta.intensity,
       });
-
-      const { audio_url } = await renderAudioPreview({
-        midiFile,
-        style: mixSettings.style,
-        intensity: mixSettings.intensity,
-        reverb: mixSettings.reverb,
-        pan: mixSettings.pan,
-        volume: mixSettings.volume,
-        preset: mixSettings.preset,
-      });
-
-      const resolved = resolveAssetUrl(audio_url);
-      if (!resolved) {
-        throw new Error("Audio render failed. Please try again later.");
-      }
-      setAudioUrl(resolved);
       setStep(5);
-    } catch (error) {
-      const message = (error as Error).message || "Audio render failed. Please try again later.";
-      setMixError(message);
-    } finally {
-      setMixLoading(false);
-    }
-  }, [midiUrl, mixSettings, motifState?.midi]);
+    },
+    []
+  );
 
   const renderStage = () => {
     switch (step) {
@@ -201,20 +164,21 @@ const App: React.FC = () => {
       case 4:
         return (
           <MixPanel
-            settings={mixSettings}
-            onSettingsChange={setMixSettings}
-            onRender={handleMixRender}
-            loading={mixLoading}
-            disabled={!midiUrl}
-            error={mixError}
-            audioUrl={audioUrl}
+            lastMidiPath={motifState?.midi ?? null}
+            lastMidiUrl={midiUrl}
+            audioUrl={audioState?.resolvedUrl ?? null}
+            style={mixStyle}
+            intensity={mixIntensity}
+            onStyleChange={setMixStyle}
+            onIntensityChange={setMixIntensity}
+            onAudioRendered={handleAudioRendered}
           />
         );
       case 5:
       default:
         return (
           <RenderPanel
-            audioUrl={audioUrl}
+            audioUrl={audioState?.resolvedUrl ?? null}
             midiUrl={midiUrl}
             projectTitle={projectTitle}
             projectId={projectId}

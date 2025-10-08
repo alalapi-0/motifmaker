@@ -90,13 +90,14 @@ export interface FreezeSuccess {
 }
 
 /**
- * 音频渲染响应，返回可供播放/下载的音频 URL。
+ * 音频渲染结果结构，记录占位合成返回的核心字段。
  */
-export interface AudioRenderSuccess {
-  ok: true;
+export interface AudioRenderResult {
   audio_url: string;
-  style?: string;
-  intensity?: number;
+  duration_sec: number;
+  renderer: string;
+  style: string;
+  intensity: number;
 }
 
 /**
@@ -346,60 +347,55 @@ export async function loadProject(
   );
 }
 
-interface RenderAudioPayload {
-  midiFile: File;
-  style: string;
-  intensity: number;
-  reverb: number;
-  pan: number;
-  volume: number;
-  preset: string;
-}
-
 /**
- * 调用新的音频渲染端点，上传 MIDI 与风格参数，返回音频 URL。
+ * renderAudio: 调用 /render/ 接口，将 MIDI 上传或传 midi_path，返回 audio_url。
+ * params:
+ *  - file?: File         // 可选，直接上传的 MIDI 文件
+ *  - midiPath?: string   // 可选，已有的 outputs/*.mid 路径
+ *  - style: string       // 渲染风格
+ *  - intensity: number   // 0..1，强度
+ * 说明：二选一传入 file 或 midiPath。服务端将返回 { ok, result: { audio_url, ... } }
+ * 中文注释：错误处理使用 ApiError 统一透传；FormData 便于混合文件与文本字段。
  */
-export async function renderAudioPreview(
-  payload: RenderAudioPayload,
+export async function renderAudio(
+  params: { file?: File; midiPath?: string; style: string; intensity: number },
   signal?: AbortSignal
-): Promise<AudioRenderSuccess> {
-  const formData = new FormData();
-  formData.append("midi_file", payload.midiFile);
-  formData.append("style", payload.style);
-  formData.append("intensity", (payload.intensity / 100).toFixed(2));
-  formData.append("reverb", String(payload.reverb));
-  formData.append("pan", String(payload.pan));
-  formData.append("volume", String(payload.volume));
-  formData.append("preset", payload.preset);
+): Promise<AudioRenderResult> {
+  const form = new FormData();
+  if (params.file) {
+    form.append("midi_file", params.file);
+  }
+  if (!params.file && params.midiPath) {
+    form.append("midi_path", params.midiPath);
+  }
+  form.append("style", params.style);
+  form.append("intensity", String(params.intensity));
 
-  const response = await fetch(`${API_BASE}/render/audio/`, {
+  const response = await fetch(`${API_BASE}/render/`, {
     method: "POST",
-    body: formData,
+    body: form,
     signal,
   });
 
-  let data: unknown = null;
+  let payload: unknown;
   try {
-    data = await response.json();
+    payload = await response.json();
   } catch (error) {
     throw new ApiError("Audio render failed. Please try again later.", response.status);
   }
 
-  const payloadData = data as Partial<AudioRenderSuccess> & {
+  const data = payload as {
+    ok?: boolean;
+    result?: AudioRenderResult;
     error?: { message?: string; code?: string; details?: unknown };
   };
 
-  if (!response.ok || payloadData?.ok !== true) {
-    const message =
-      payloadData?.error?.message || "Audio render failed. Please try again later.";
-    throw new ApiError(message, response.status, payloadData?.error?.code, payloadData?.error?.details);
+  if (!response.ok || data.ok !== true || !data.result) {
+    const message = data.error?.message || "Audio render failed. Please try again later.";
+    throw new ApiError(message, response.status, data.error?.code, data.error?.details);
   }
 
-  if (!payloadData.audio_url) {
-    throw new ApiError("Audio render response missing audio_url.", response.status);
-  }
-
-  return payloadData as AudioRenderSuccess;
+  return data.result;
 }
 
 /**

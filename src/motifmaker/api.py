@@ -14,10 +14,11 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .audio_render import router as audio_render_router
-from .config import settings
+from .config import settings, OUTPUT_DIR
 from .errors import (
     MMError,
     PersistenceError,
@@ -48,6 +49,12 @@ app.add_middleware(
     allow_credentials=False,
 )
 
+# 中文注释：挂载静态目录前确保输出路径存在，避免启动时因目录缺失而失败。
+ensure_directory(OUTPUT_DIR)
+# 中文注释：开发阶段直接挂载 outputs 目录用于提供 MIDI/WAV 下载；生产环境建议使用 Nginx/Caddy 等专业静态服务。
+app.mount("/outputs", StaticFiles(directory=OUTPUT_DIR), name="outputs")
+
+# 中文注释：注册音频渲染路由，保持主应用初始化时完成依赖注入。
 app.include_router(audio_render_router)
 
 

@@ -31,48 +31,57 @@ const RenderPanel: React.FC<RenderPanelProps> = ({ audioUrl, midiUrl, projectTit
             <p className="text-xs uppercase tracking-[0.3em] text-gray-500">Track Title</p>
             <p className="text-xl font-bold text-white">{projectTitle ?? "Untitled Metal Render"}</p>
           </div>
+          {/* 中文注释：若音频已渲染则提供播放器与下载链接，否则提示回到 Mixing 步骤继续生成。 */}
           {audioUrl ? (
-            <div className="flex flex-col gap-3">
-              <p className="text-xs uppercase tracking-[0.3em] text-gray-500">Preview</p>
-              <audio controls className="w-full rounded-lg border border-bloodred/40 bg-black/50 p-2">
-                <source src={audioUrl} />
-                Your browser does not support the audio element.
-              </audio>
-              <p className="text-sm text-gray-400">🎵 Track Ready!</p>
+            <div className="flex flex-col gap-4">
+              <div>
+                <p className="text-xs uppercase tracking-[0.3em] text-gray-500">Preview</p>
+                <audio controls className="mt-2 w-full rounded-lg border border-bloodred/40 bg-black/50 p-2">
+                  <source src={audioUrl} />
+                  Your browser does not support the audio element.
+                </audio>
+              </div>
+              <div className="flex flex-wrap gap-3">
+                <a
+                  className="metal-button inline-flex items-center justify-center rounded-md px-6 py-3 text-sm"
+                  href={audioUrl}
+                  download
+                >
+                  Download Audio
+                </a>
+                <a
+                  className="metal-button inline-flex items-center justify-center rounded-md px-6 py-3 text-sm"
+                  href={midiUrl ?? "#"}
+                  download
+                  aria-disabled={!midiUrl}
+                  onClick={(event) => {
+                    if (!midiUrl) {
+                      event.preventDefault();
+                    }
+                  }}
+                >
+                  Download MIDI
+                </a>
+              </div>
             </div>
           ) : (
-            <p className="text-sm text-gray-500">
-              Render the mix to unlock the final preview. The player will appear here once audio is available.
-            </p>
+            <div className="space-y-4">
+              <p className="text-sm text-gray-500">Audio not rendered yet. Go to Mixing step.</p>
+              <a
+                className="metal-button inline-flex items-center justify-center rounded-md px-6 py-3 text-sm"
+                href={midiUrl ?? "#"}
+                download
+                aria-disabled={!midiUrl}
+                onClick={(event) => {
+                  if (!midiUrl) {
+                    event.preventDefault();
+                  }
+                }}
+              >
+                Download MIDI
+              </a>
+            </div>
           )}
-          <div className="mt-4 flex flex-wrap gap-3">
-            <a
-              className="metal-button inline-flex items-center justify-center rounded-md px-6 py-3 text-sm"
-              href={midiUrl ?? "#"}
-              download
-              aria-disabled={!midiUrl}
-              onClick={(event) => {
-                if (!midiUrl) {
-                  event.preventDefault();
-                }
-              }}
-            >
-              Download MIDI
-            </a>
-            <a
-              className="metal-button inline-flex items-center justify-center rounded-md px-6 py-3 text-sm"
-              href={audioUrl ?? "#"}
-              download
-              aria-disabled={!audioUrl}
-              onClick={(event) => {
-                if (!audioUrl) {
-                  event.preventDefault();
-                }
-              }}
-            >
-              Download Audio
-            </a>
-          </div>
         </div>
       </div>
     </section>
