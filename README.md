@@ -76,7 +76,12 @@ Prompt → 解析层(parsing) → 骨架JSON(schema) → 动机生成(motif)
 - Black-Red Metal Theme
 - Step-by-Step Music Generation
   1. Motif → 2. Melody → 3. MIDI → 4. Mix → 5. Final Track
-- Mixing step currently simulated; future versions will include audio rendering (API integration planned)
+- Mixing step now uploads MIDI to an experimental audio renderer stub.
+
+## 🔊 Audio Rendering (Experimental)
+- POST /render/audio/ : Upload MIDI + style → returns audio URL
+- Default renderer: simulated (no real AI)
+- Future: integrate MusicGen or Mubert API
 
 ### 典型操作流程
 1. 在 Web UI 输入 Prompt 并点击“生成”。

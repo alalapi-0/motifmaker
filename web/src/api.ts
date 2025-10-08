@@ -90,10 +90,13 @@ export interface FreezeSuccess {
 }
 
 /**
- * 混音模拟响应，仅返回占位音频的 URL，后续可接入真实渲染服务。
+ * 音频渲染响应，返回可供播放/下载的音频 URL。
  */
-export interface MixSuccess {
-  wave_url: string;
+export interface AudioRenderSuccess {
+  ok: true;
+  audio_url: string;
+  style?: string;
+  intensity?: number;
 }
 
 /**
@@ -343,20 +346,60 @@ export async function loadProject(
   );
 }
 
+interface RenderAudioPayload {
+  midiFile: File;
+  style: string;
+  intensity: number;
+  reverb: number;
+  pan: number;
+  volume: number;
+  preset: string;
+}
+
 /**
- * 调用 /mix 接口预览混音结果，目前为模拟数据，返回占位波形地址。
+ * 调用新的音频渲染端点，上传 MIDI 与风格参数，返回音频 URL。
  */
-export async function requestMix(
-  payload: {
-    midi_path: string;
-    reverb: number;
-    pan: number;
-    volume: number;
-    preset: string;
-  },
+export async function renderAudioPreview(
+  payload: RenderAudioPayload,
   signal?: AbortSignal
-): Promise<MixSuccess> {
-  return postJson<MixSuccess>("/mix", payload, signal);
+): Promise<AudioRenderSuccess> {
+  const formData = new FormData();
+  formData.append("midi_file", payload.midiFile);
+  formData.append("style", payload.style);
+  formData.append("intensity", (payload.intensity / 100).toFixed(2));
+  formData.append("reverb", String(payload.reverb));
+  formData.append("pan", String(payload.pan));
+  formData.append("volume", String(payload.volume));
+  formData.append("preset", payload.preset);
+
+  const response = await fetch(`${API_BASE}/render/audio/`, {
+    method: "POST",
+    body: formData,
+    signal,
+  });
+
+  let data: unknown = null;
+  try {
+    data = await response.json();
+  } catch (error) {
+    throw new ApiError("Audio render failed. Please try again later.", response.status);
+  }
+
+  const payloadData = data as Partial<AudioRenderSuccess> & {
+    error?: { message?: string; code?: string; details?: unknown };
+  };
+
+  if (!response.ok || payloadData?.ok !== true) {
+    const message =
+      payloadData?.error?.message || "Audio render failed. Please try again later.";
+    throw new ApiError(message, response.status, payloadData?.error?.code, payloadData?.error?.details);
+  }
+
+  if (!payloadData.audio_url) {
+    throw new ApiError("Audio render response missing audio_url.", response.status);
+  }
+
+  return payloadData as AudioRenderSuccess;
 }
 
 /**
