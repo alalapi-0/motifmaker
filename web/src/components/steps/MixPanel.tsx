@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { SlAlert, SlRadio, SlRadioGroup } from "@shoelace-style/shoelace/dist/react";
 
-import { AudioRenderResult, renderAudio, resolveAssetUrl } from "../../api";
+import { AudioRenderResult, configPublic, renderAudio, resolveAssetUrl } from "../../api";
 
 /**
  * MixPanel 组件：在流程的混音阶段触发音频渲染，占位实现会在本地生成正弦波音频。
@@ -42,6 +42,28 @@ const MixPanel: React.FC<MixPanelProps> = ({
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [provider, setProvider] = useState<string>("placeholder");
+
+  useEffect(() => {
+    // 中文注释：首次挂载时读取公开配置，获知当前音频 Provider 类型供 UI 提示使用。
+    let cancelled = false;
+    const controller = new AbortController();
+    configPublic(controller.signal)
+      .then((info) => {
+        if (!cancelled) {
+          setProvider(info.audio_provider);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setProvider("unknown");
+        }
+      });
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, []);
 
   useEffect(() => {
     // 中文注释：当新的 MIDI 路径生成时，默认切换为“使用最近一次生成的 MIDI”。
@@ -227,6 +249,18 @@ const MixPanel: React.FC<MixPanelProps> = ({
       >
         {loading ? "Rendering..." : "Mix & Render to Audio"}
       </button>
+
+      <div className="mt-4 flex items-center justify-between text-xs text-gray-500">
+        <span>
+          {/* 中文注释：保持文案为英文，仅展示当前后端 Provider 名称，帮助用户识别是否为模拟渲染。 */}
+          Audio Provider: {provider}
+        </span>
+        {provider.toLowerCase() === "placeholder" && (
+          <span className="rounded border border-bloodred px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.3em] text-bloodred">
+            Simulation
+          </span>
+        )}
+      </div>
     </section>
   );
 };
