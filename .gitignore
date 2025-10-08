@@ -124,6 +124,14 @@ compiled/
 # Front-end build artefacts
 /web/node_modules/
 /web/dist/
+/desktop/node_modules/
+/desktop/dist/
+
+# Electron packaging outputs
+/release/
+
+# Desktop runtime日志
+logs/
 
 # Persisted project snapshots
 /projects/
