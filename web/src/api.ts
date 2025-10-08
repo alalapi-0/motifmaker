@@ -90,6 +90,13 @@ export interface FreezeSuccess {
 }
 
 /**
+ * 混音模拟响应，仅返回占位音频的 URL，后续可接入真实渲染服务。
+ */
+export interface MixSuccess {
+  wave_url: string;
+}
+
+/**
  * /healthz 健康检查响应。
  */
 export interface HealthResponse {
@@ -162,6 +169,10 @@ export function resolveAssetUrl(path: string | null | undefined): string | null 
   if (!path) return null;
   if (/^https?:\/\//i.test(path)) {
     return path; // 后端已返回完整 URL 时无需处理。
+  }
+  if (path.startsWith("/")) {
+    const base = API_BASE.replace(/\/?$/, "");
+    return `${base}${path}`; // 处理以 / 开头的静态资源路径，常见于占位音频。
   }
   const base = API_BASE.replace(/\/?$/, "");
   // 通过 download 端点安全读取输出目录，避免直接暴露文件系统结构。
@@ -330,6 +341,22 @@ export async function loadProject(
     { name },
     signal
   );
+}
+
+/**
+ * 调用 /mix 接口预览混音结果，目前为模拟数据，返回占位波形地址。
+ */
+export async function requestMix(
+  payload: {
+    midi_path: string;
+    reverb: number;
+    pan: number;
+    volume: number;
+    preset: string;
+  },
+  signal?: AbortSignal
+): Promise<MixSuccess> {
+  return postJson<MixSuccess>("/mix", payload, signal);
 }
 
 /**
