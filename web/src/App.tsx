@@ -8,7 +8,7 @@ import RenderPanel from "./components/steps/RenderPanel";
 import {
   generate,
   renderProject,
-  requestMix,
+  renderAudioPreview,
   resolveAssetUrl,
   RenderSuccess,
 } from "./api";
@@ -49,7 +49,9 @@ const App: React.FC = () => {
     reverb: 35,
     pan: 0,
     volume: -6,
+    intensity: 55,
     preset: "metal-suite",
+    style: "cinematic",
   }); // 混音参数集合。
   const [mixLoading, setMixLoading] = useState(false); // 混音阶段加载态。
   const [mixError, setMixError] = useState<string | null>(null); // 混音阶段错误提示。
@@ -106,31 +108,60 @@ const App: React.FC = () => {
     }
   }, [motifState]);
 
-  const handleMixPreview = useCallback(async () => {
-    if (!motifState?.midi) {
+  const handleMixRender = useCallback(async () => {
+    if (!midiUrl) {
       setMixError("Arrange a MIDI file before mixing.");
       return;
     }
     setMixLoading(true);
     setMixError(null);
+    setAudioUrl(null);
     try {
-      const response = await requestMix({
-        midi_path: motifState.midi,
+      const midiResponse = await fetch(midiUrl);
+      if (!midiResponse.ok) {
+        throw new Error("Unable to fetch the MIDI file for rendering.");
+      }
+      const midiBlob = await midiResponse.blob();
+      const midiName = (() => {
+        try {
+          const parsed = new URL(midiUrl);
+          const candidate = parsed.pathname.split("/").pop();
+          if (candidate && candidate.trim().length > 0) {
+            return candidate;
+          }
+        } catch (error) {
+          // ignore URL parsing error and fallback to stored spec path
+        }
+        const fallback = motifState?.midi?.split(/[/\\]/).pop();
+        return fallback && fallback.length > 0 ? fallback : "mix_render.mid";
+      })();
+      const midiFile = new File([midiBlob], midiName, {
+        type: midiResponse.headers.get("Content-Type") ?? "audio/midi",
+      });
+
+      const { audio_url } = await renderAudioPreview({
+        midiFile,
+        style: mixSettings.style,
+        intensity: mixSettings.intensity,
         reverb: mixSettings.reverb,
         pan: mixSettings.pan,
         volume: mixSettings.volume,
         preset: mixSettings.preset,
       });
-      const resolved = resolveAssetUrl(response.wave_url);
+
+      const resolved = resolveAssetUrl(audio_url);
+      if (!resolved) {
+        throw new Error("Audio render failed. Please try again later.");
+      }
       setAudioUrl(resolved);
       setStep(5);
     } catch (error) {
-      const message = (error as Error).message || "Mixing preview failed. Check the backend logs.";
+      const message = (error as Error).message || "Audio render failed. Please try again later.";
       setMixError(message);
     } finally {
       setMixLoading(false);
     }
-  }, [mixSettings, motifState]);
+  }, [midiUrl, mixSettings, motifState?.midi]);
 
   const renderStage = () => {
     switch (step) {
@@ -172,10 +203,11 @@ const App: React.FC = () => {
           <MixPanel
             settings={mixSettings}
             onSettingsChange={setMixSettings}
-            onPreview={handleMixPreview}
+            onRender={handleMixRender}
             loading={mixLoading}
             disabled={!midiUrl}
             error={mixError}
+            audioUrl={audioUrl}
           />
         );
       case 5:

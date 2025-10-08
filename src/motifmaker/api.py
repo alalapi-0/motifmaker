@@ -16,6 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
+from .audio_render import router as audio_render_router
 from .config import settings
 from .errors import (
     MMError,
@@ -46,6 +47,8 @@ app.add_middleware(
     allow_headers=["Content-Type", "Authorization"],
     allow_credentials=False,
 )
+
+app.include_router(audio_render_router)
 
 
 @app.middleware("http")
