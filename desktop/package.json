@@ -1,0 +1,33 @@
+{
+  "name": "motifmaker-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Electron shell for MotifMaker",
+  "main": "dist/main.js",
+  "scripts": {
+    "// dev": "中文说明：同时拉起前端、后端与 Electron，便于一键开发调试",
+    "dev": "concurrently -k \"npm:dev:web\" \"npm:dev:backend\" \"npm:dev:electron\"",
+    "dev:web": "cd ../web && npm run dev",
+    "dev:backend": "cross-env PYTHONUNBUFFERED=1 python -m uvicorn motifmaker.api:app --host 127.0.0.1 --port 8000 --reload",
+    "dev:electron": "cross-env MM_ELECTRON_SKIP_BACKEND=1 ts-node --project tsconfig.json src/main.ts --dev",
+    "// build": "中文说明：build 先构建 web，再编译 Electron TypeScript 产出 desktop/dist",
+    "build": "npm run build:web && npm run build:electron",
+    "build:web": "cd ../web && npm install --no-audit --no-fund && npm run build",
+    "build:electron": "tsc -p tsconfig.json",
+    "start:electron": "node dist/main.js",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/electron": "^1",
+    "@types/node": "^20",
+    "concurrently": "^8",
+    "cross-env": "^7",
+    "electron": "^30",
+    "electron-builder": "^24",
+    "ts-node": "^10",
+    "typescript": "^5"
+  },
+  "// scripts-note": "中文说明：dev/pack/dist 在 macOS / Windows / Linux 上均可运行；cross-env 用于保证环境变量跨平台一致"
+}

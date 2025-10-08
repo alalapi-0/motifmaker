@@ -1,0 +1,32 @@
+# 中文注释：该配置描述 electron-builder 如何将 MotifMaker 打包成桌面安装包
+appId: com.motifmaker.app
+productName: MotifMaker
+asar: true  # 中文注释：启用 asar 以避免源码被直接篡改，同时缩短读取时间
+directories:
+  output: ../release  # 中文注释：所有安装包输出到仓库根目录的 release/，并在 .gitignore 中忽略
+files:
+  - from: dist
+    to: .
+    filter:
+      - "**/*"  # 中文注释：仅将经过 TypeScript 编译的 Electron 主进程文件打包
+  - from: ../web/dist
+    to: web-dist  # 中文注释：生产模式下前端静态资源从 web/dist 拷贝至安装包
+mac:
+  target:
+    - dmg
+    - zip
+  artifactName: "MotifMaker-${version}-mac.${ext}"
+  # 中文注释：如需替换图标，请在 desktop/icons/ 中放置 icns 文件，并在此处配置 icon 字段
+win:
+  target:
+    - nsis
+    - zip
+  artifactName: "MotifMaker-${version}-win.${ext}"
+  # 中文注释：Windows 图标文件应放于 desktop/icons/app.ico 并在此处配置 icon 字段
+linux:
+  target:
+    - AppImage
+    - deb
+  artifactName: "MotifMaker-${version}-linux.${ext}"
+  category: AudioVideo
+extraResources: []  # 中文注释：不额外打入音频/模型等大文件，保持安装包精简

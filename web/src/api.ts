@@ -163,9 +163,26 @@ export class ApiError extends Error {
 // 基础配置与工具函数
 // -----------------------------
 
-// 通过 Vite 环境变量读取 API 基础地址，默认指向本地开发服务器。
-export const API_BASE: string =
-  (import.meta as any).env?.VITE_API_BASE ?? "http://127.0.0.1:8000";
+/**
+ * 中文注释：优先读取 Vite 注入的 VITE_API_BASE，方便浏览器或 PWA 指向远程后端；
+ * 当检测到运行在 Electron（preload 暴露的 window.mm 或 process.versions.electron）且未显式指定时，
+ * 默认回落到本地 FastAPI 端口，确保桌面端始终连接回环地址。
+ */
+function resolveApiBase(): string {
+  const envBase = (import.meta as any).env?.VITE_API_BASE as string | undefined;
+  if (envBase && envBase.length > 0) {
+    return envBase;
+  }
+  const globalAny = globalThis as any;
+  const isElectron = Boolean(globalAny?.process?.versions?.electron) || Boolean(globalAny?.mm);
+  if (isElectron) {
+    return "http://127.0.0.1:8000";
+  }
+  // 浏览器环境下仍以本地端口为默认值，保持与旧版一致，便于本地开发。
+  return "http://127.0.0.1:8000";
+}
+
+export const API_BASE: string = resolveApiBase();
 
 /**
  * 构造后端资源的可访问 URL。

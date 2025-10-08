@@ -186,6 +186,33 @@ curl http://localhost:8000/config-public
 
 仓库已在 `.gitignore` 中忽略 `outputs/`、`projects/`、`*.mid`、`web/node_modules/`、`web/dist/` 等目录，禁止将渲染产物与前端构建文件提交到版本库。
 
+## Desktop (Electron)
+
+- **安装依赖**：
+  ```bash
+  cd desktop
+  npm install
+  ```
+- **开发模式一键启动**（Vite + FastAPI + Electron 同时运行，Electron 会在 `MM_ELECTRON_SKIP_BACKEND=1` 的前提下跳过内置子进程，仅负责健康检查与窗口加载）：
+  ```bash
+  cd desktop
+  npm run dev
+  ```
+  - 脚本内部并发执行 `web` 的 `npm run dev`、`python -m uvicorn ... --reload` 与 `ts-node src/main.ts --dev`，前端热更新与后端自动重载可即时生效。
+- **手动分步启动（可选）**：在三个终端中依次运行 `cd web && npm run dev`、`python -m uvicorn motifmaker.api:app --reload`、`cd desktop && ts-node src/main.ts --dev`。
+- **生产构建流程**：
+  ```bash
+  cd web && npm install && npm run build
+  cd ../desktop && npm install && npm run build
+  npm run dist   # 产物写入仓库根目录 release/
+  ```
+- **运行行为**：生产模式下 Electron 会自动拉起 FastAPI 子进程，轮询 `/healthz` 确认就绪后加载 `web/dist` 静态资源；退出时通过 SIGTERM（或 Windows taskkill）确保后端不残留。
+- **常见问题**：
+  - 端口占用：请确认 5173（Vite）与 8000（FastAPI）空闲，可通过 `MM_BACKEND_PORT` 调整后端监听端口。
+  - Python 缺失：启动失败会弹出错误提示，请在仓库根执行 `pip install -r requirements.txt`。
+  - 白屏或资源 404：通常是 `web/dist` 未构建或 CSP 阻止外部资源，请重新执行 `npm run build` 并确保未手动修改 `electron-builder.yml` 中的路径。
+  - 离线场景：桌面端完全依赖本地 FastAPI，断网后仍可完成 MIDI 生成、试听与下载。
+
 ## 8. 未来路线图（Roadmap）
 - **和声扩展**：引入借用和弦、更多二级属、调式交替的策略库。
 - **旋律发展**：支持节奏置换、序列推进、尾音延长的自动化操作。
