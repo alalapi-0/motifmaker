@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 import "./styles.css";
+import "@shoelace-style/shoelace/dist/themes/dark.css"; // 引入 Shoelace 深色主题，确保控件与金属 UI 色调统一。
 import { I18nProvider } from "./i18n"; // 引入轻量级多语言 Provider，确保所有子组件可访问 t()。
 
 /**

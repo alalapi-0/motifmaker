@@ -197,6 +197,29 @@ class LoadProjectResponse(BaseModel):
     path: str
 
 
+class MixRequest(BaseModel):
+    """混音模拟请求体：前端传入 MIDI 路径与基础调参。"""
+
+    midi_path: str
+    reverb: int
+    pan: int
+    volume: float
+    preset: str
+
+
+class MixResponse(BaseModel):
+    """混音模拟响应，仅返回占位波形地址，后续可扩展更多字段。"""
+
+    wave_url: str
+
+
+class SuccessMixResponse(BaseModel):
+    """混音模拟成功返回包装，保持与其他接口一致的 {ok,result} 结构。"""
+
+    ok: Literal[True]
+    result: MixResponse
+
+
 class SuccessRenderResponse(BaseModel):
     """统一响应包装：渲染成功时返回 ok/result。"""
 
@@ -476,6 +499,20 @@ async def load_project(request: LoadProjectRequest) -> dict[str, object]:
         raise PersistenceError(str(exc)) from exc
     path = Path(settings.projects_dir) / f"{request.name}.json"
     return success_response(LoadProjectResponse(project=spec, path=str(path)))
+
+
+@app.post("/mix", response_model=SuccessMixResponse, dependencies=[Depends(rate_limiter)])
+async def mix_preview(request: MixRequest) -> dict[str, object]:
+    """模拟混音端点：当前返回占位音频地址，后续可替换为真实渲染。"""
+
+    if not request.midi_path.strip():
+        raise ValidationError("MIDI 路径不能为空")
+    logger.info(
+        "mix_preview", extra={"preset": request.preset, "reverb": request.reverb, "pan": request.pan, "volume": request.volume}
+    )
+    # 预留钩子：未来可在此调用外部模型或内部渲染引擎生成波形文件。
+    dummy_url = "/dummy/audio_preview.mp3"
+    return success_response(MixResponse(wave_url=dummy_url))
 
 
 @app.get("/download")

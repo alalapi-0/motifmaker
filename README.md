@@ -72,6 +72,12 @@ Prompt → 解析层(parsing) → 骨架JSON(schema) → 动机生成(motif)
   - 若请求失败，Shoelace `<sl-alert>` 会在顶部出现错误提示，常见原因包括跨域配置或后端服务未启动。
   - MIDI 解析失败会在日志区提示，可下载文件手动导入 DAW 检查。
 
+## 🎨 New UI Flow (Version 0.3)
+- Black-Red Metal Theme
+- Step-by-Step Music Generation
+  1. Motif → 2. Melody → 3. MIDI → 4. Mix → 5. Final Track
+- Mixing step currently simulated; future versions will include audio rendering (API integration planned)
+
 ### 典型操作流程
 1. 在 Web UI 输入 Prompt 并点击“生成”。
 2. 试听或下载返回的 MIDI；必要时保存工程以便下次载入。
