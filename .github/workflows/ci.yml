@@ -9,6 +9,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # 安装 shellcheck 以便检查部署脚本的 Bash 语法
+      - name: Install shellcheck
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -17,6 +23,9 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
+      # 使用 shellcheck 确认 Bash 脚本风格与潜在错误
+      - name: Lint shell scripts
+        run: shellcheck deploy/scripts/*.sh
       - name: Lint with black
         run: black --check src tests
       - name: Lint with isort
@@ -27,3 +36,13 @@ jobs:
         run: echo "flake8 检查由 black/isort 组合替代，避免重复规则冲突"
       - name: Run tests
         run: pytest -q
+      # 仅做静态检查：确认健康检查脚本存在且具备执行权限
+      - name: Verify health script executable
+        run: test -x deploy/scripts/check_health.sh
+      # 在 PR 打上 frontend 标签时，执行前端构建以确认产物可生成
+      - name: Frontend build dry run
+        if: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'frontend') }}
+        run: |
+          cd web
+          npm ci
+          npm run build

@@ -1,0 +1,29 @@
+# ==========================================
+# MotifMaker Nginx 示例配置
+# 说明：将此文件放置到 /etc/nginx/conf.d/ 并根据实际域名、路径调整。
+# 注意：以下配置监听 80 端口，可配合 Certbot 申请 HTTPS 证书。
+# ==========================================
+
+server {
+    listen 80;
+    server_name api.example.com;  # 替换为真实域名或使用 _ 作为通配
+
+    # 如果需要 TLS，可在证书申请完成后增加 listen 443 ssl http2; 并配置证书路径。
+    # 推荐执行：sudo certbot --nginx -d api.example.com
+
+    client_max_body_size 8m;  # 限制上传文件大小，避免过载
+
+    location / {
+        proxy_pass http://127.0.0.1:8000;  # 后端 Uvicorn 监听地址
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 300s;
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 300s;
+    }
+
+    # 可选：将静态文件交由前端静态站点或 CDN 提供。
+}

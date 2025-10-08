@@ -1,0 +1,12 @@
+# ==========================================
+# MotifMaker Caddy 示例配置
+# 说明：Caddy 将自动为域名申请 Let’s Encrypt 证书，以下站点为占位符。
+# 本配置通过 reverse_proxy 将流量转发到本地 Uvicorn。
+# ==========================================
+
+api.example.com {
+    reverse_proxy 127.0.0.1:8000
+    # 可使用以下命令在本地测试 Caddy：
+    #   caddy run --config deploy/caddy/Caddyfile.example --adapter caddyfile
+    # 若在开发机运行，请将域名修改为 localhost 并设置 hosts 文件。
+}
