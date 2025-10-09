@@ -65,15 +65,7 @@ def _transpose_motif(motif: Motif, semitones: int) -> List[MotifNote]:
 
 
 def _tail_extend(notes: List[MotifNote], extra_beats: float) -> List[MotifNote]:
-    """Extend the final note to simulate phrase elongation.
-
-    Args:
-        notes: Motif notes to augment.
-        extra_beats: Additional duration to add to the final note.
-
-    Returns:
-        Updated list of notes where only the final note is elongated.
-    """
+    """Extend the final note to simulate phrase elongation."""
 
     if not notes:
         return []
@@ -85,28 +77,105 @@ def _tail_extend(notes: List[MotifNote], extra_beats: float) -> List[MotifNote]:
     return extended
 
 
+def _tail_recycle(notes: List[MotifNote], reduction: float) -> List[MotifNote]:
+    """Shorten the final note to produce a clipped release."""
+
+    if not notes:
+        return []
+    recycled = list(notes)
+    last = recycled[-1]
+    recycled[-1] = MotifNote(
+        pitch=last.pitch, duration_beats=max(0.25, last.duration_beats - reduction)
+    )
+    return recycled
+
+
+def _scale_rhythm(notes: List[MotifNote], factor: float) -> List[MotifNote]:
+    """Apply a uniform time-scaling factor to the motif."""
+
+    return [
+        MotifNote(
+            pitch=note.pitch,
+            duration_beats=max(0.125, note.duration_beats * factor),
+        )
+        for note in notes
+    ]
+
+
+def _sequence_expand(notes: List[MotifNote], step: int, repeats: int) -> List[MotifNote]:
+    """Create a sequential repetition by transposing the motif."""
+
+    if not notes:
+        return []
+    expanded: List[MotifNote] = []
+    for repeat in range(max(1, repeats)):
+        offset = step * repeat
+        for note in notes:
+            expanded.append(
+                MotifNote(pitch=note.pitch + offset, duration_beats=note.duration_beats)
+            )
+    return expanded
+
+
 def _motif_variant(motif: Motif, section: FormSection) -> List[MotifNote]:
-    """Select a variation strategy for the section.
+    """Select a variation strategy for the section using modular operators."""
 
-    The mapping below loosely mirrors classical development techniques:
-    ``A'`` receives a tail extension, ``B`` sections are transposed upward to
-    elevate tension, and bridge-like sections are rhythmically compressed.
+    label = section.section.upper()
+    notes = list(motif.notes)
 
-    Args:
-        motif: Motif providing the base material.
-        section: Form section describing the structural role.
+    if label == "A'":
+        pipeline = [
+            ("augmentation", {"factor": 1.0}),
+            ("tail_extend", {"extra": 0.5}),
+        ]
+    elif label.startswith("B"):
+        pipeline = [
+            ("sequence", {"step": 2, "repeats": 2}),
+            ("tail_recycle", {"reduction": 0.25}),
+        ]
+    elif "BRIDGE" in label:
+        pipeline = [
+            ("diminution", {"factor": 0.75}),
+            ("sequence", {"step": 1, "repeats": 2}),
+        ]
+    elif label == "INTRO":
+        pipeline = [
+            ("augmentation", {"factor": 1.2}),
+            ("tail_recycle", {"reduction": 0.3}),
+        ]
+    elif label == "OUTRO":
+        pipeline = [
+            ("augmentation", {"factor": 1.1}),
+            ("tail_extend", {"extra": 0.25}),
+        ]
+    elif label.startswith("C"):
+        pipeline = [
+            ("sequence", {"step": -2, "repeats": 2}),
+            ("diminution", {"factor": 0.9}),
+        ]
+    else:
+        pipeline = []
 
-    Returns:
-        List of notes representing the selected variation.
-    """
+    for name, params in pipeline:
+        if name == "augmentation":
+            notes = _scale_rhythm(notes, float(params.get("factor", 1.0)))
+        elif name == "diminution":
+            notes = _scale_rhythm(notes, float(params.get("factor", 0.75)))
+        elif name == "sequence":
+            notes = _sequence_expand(
+                notes,
+                int(params.get("step", 2)),
+                int(params.get("repeats", 2)),
+            )
+        elif name == "tail_extend":
+            notes = _tail_extend(notes, float(params.get("extra", 0.5)))
+        elif name == "tail_recycle":
+            notes = _tail_recycle(notes, float(params.get("reduction", 0.25)))
 
-    if section.section == "A'":
-        return _tail_extend(_stretch_motif(motif, 1.0), extra_beats=0.5)
-    if section.section.lower().startswith("b"):
-        return _transpose_motif(motif, 2)
-    if "bridge" in section.section.lower():
-        return _stretch_motif(motif, 0.75)
-    return motif.notes
+    if label.startswith("B") and section.section.lower().startswith("b"):
+        notes = _transpose_motif(Motif(notes), 2)
+
+    return notes
 
 
 def expand_form(spec: ProjectSpec, motifs: Dict[str, Motif]) -> List[SectionSketch]:

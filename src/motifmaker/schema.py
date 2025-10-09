@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any, Dict, List, Sequence
 
 from pydantic import BaseModel, Field, ValidationError as PydanticValidationError
@@ -82,6 +83,18 @@ class ProjectSpec(BaseModel):
     use_secondary_dominant: bool = Field(
         False,
         description="Insert a secondary dominant before cadences when enabled",
+    )
+    use_borrowed_chords: bool = Field(
+        False,
+        description="Enable borrowed chords such as bVII/bVI near cadences",
+    )
+    humanization: bool = Field(
+        False,
+        description="Apply subtle timing/velocity variations when rendering",
+    )
+    style_template: Dict[str, Any] | None = Field(
+        default=None,
+        description="Optional style template metadata (progressions, beat patterns, instrumentation)",
     )
     generated_sections: Dict[str, Dict[str, Any]] | None = Field(
         default=None, description="Cached summaries produced during rendering"
@@ -251,6 +264,10 @@ def default_from_prompt_meta(meta: Dict[str, Any]) -> ProjectSpec:
         )
         harmony_level = meta.get("harmony_level") or "basic"
         use_secondary_dominant = bool(meta.get("use_secondary_dominant", False))
+        use_borrowed_chords = bool(meta.get("use_borrowed_chords", False))
+        humanization = bool(meta.get("humanization", False))
+        style_template = meta.get("style_template")
+        style_template_copy = deepcopy(style_template) if style_template else None
 
         return ProjectSpec(
             form=form_sections,
@@ -265,6 +282,9 @@ def default_from_prompt_meta(meta: Dict[str, Any]) -> ProjectSpec:
             motif_style=str(motif_style),
             harmony_level=str(harmony_level),
             use_secondary_dominant=use_secondary_dominant,
+            use_borrowed_chords=use_borrowed_chords,
+            humanization=humanization,
+            style_template=style_template_copy,
         )
     except ValidationError:
         raise

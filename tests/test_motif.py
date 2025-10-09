@@ -1,4 +1,4 @@
-from motifmaker.motif import Motif, generate_motif
+from motifmaker.motif import MOTIF_LIBRARY, Motif, generate_motif
 
 
 def test_generate_motif_basic():
@@ -15,3 +15,8 @@ def test_generate_motif_basic():
     total_beats = sum(note.duration_beats for note in motif.notes)
     assert 2.0 <= total_beats <= 8.0
     assert all(50 <= note.pitch <= 90 for note in motif.notes)
+
+
+def test_motif_library_catalogue() -> None:
+    assert len(MOTIF_LIBRARY) >= 10
+    assert "pendulum" in MOTIF_LIBRARY

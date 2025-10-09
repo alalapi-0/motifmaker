@@ -97,13 +97,37 @@ def _apply_color(chord: List[int], label: str) -> List[int]:
     return chord + [chord[0] + 11]
 
 
+def _build_borrowed_chords(
+    root_pitch: int, mode: str, colorful: bool
+) -> List[tuple[str, List[int]]]:
+    """Construct bVII/bVI chords used for optional modal mixture."""
+
+    chords: List[tuple[str, List[int]]] = []
+
+    seventh_root = root_pitch + 10
+    seventh = [seventh_root, seventh_root + 3, seventh_root + 7]
+    if colorful:
+        seventh.append(seventh_root + 10)
+    chords.append(("bVII", seventh))
+
+    sixth_root = root_pitch + 8
+    third_interval = 4 if mode == "major" else 4
+    sixth = [sixth_root, sixth_root + third_interval, sixth_root + 7]
+    if colorful:
+        sixth.append(sixth_root + 11)
+    chords.append(("bVI", sixth))
+
+    return chords
+
+
 def generate_harmony(
     spec: ProjectSpec,
     sketches: List[SectionSketch],
     *,
     use_secondary_dominant: bool = False,
+    use_borrowed_chords: bool = False,
 ) -> Dict[str, List[HarmonyEvent]]:
-    """根据项目规格生成和声事件，新增和声小调与二级属支持。"""
+    """根据项目规格生成和声事件，新增和声小调、二级属与借用和弦支持。"""
 
     root_pitch = KEY_TO_MIDI.get(spec.key, 60)
     progression = HARMONY_PROGRESSIONS.get(spec.mode, HARMONY_PROGRESSIONS["major"])
@@ -133,6 +157,34 @@ def generate_harmony(
             if colorful:
                 # 色彩模式下继续为和弦添加七和弦或借用和弦音。
                 pitches = _apply_color(pitches, label)
+
+            if use_borrowed_chords and label.upper().startswith("IV"):
+                borrowed_chain = _build_borrowed_chords(
+                    root_pitch, spec.mode, colorful
+                )
+                borrowed_chain.append(
+                    (
+                        chord_label if not colorful else f"{chord_label}7",
+                        pitches,
+                    )
+                )
+                segment = segment_beats / float(len(borrowed_chain))
+                for borrowed_label, borrowed_pitches in borrowed_chain:
+                    chord_name = (
+                        f"{borrowed_label}7" if colorful and borrowed_label in {"bVII", "bVI"} else borrowed_label
+                    )
+                    events.append(
+                        HarmonyEvent(
+                            start_beat=start_beat,
+                            duration_beats=segment,
+                            chord_name=chord_name,
+                            pitches=borrowed_pitches,
+                            bass_pitch=borrowed_pitches[0] - 12,
+                        )
+                    )
+                    start_beat += segment
+                idx += 1
+                continue
 
             # 当即将进入终止时并开启二级属功能时，插入额外的 V/V。
             if (
