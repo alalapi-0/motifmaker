@@ -13,3 +13,5 @@ def test_project_spec_validation() -> None:
     assert spec.rhythm_density in {"low", "medium", "high"}
     assert spec.harmony_level in {"basic", "colorful"}
     assert spec.motif_style
+    assert spec.humanization in {True, False}
+    assert spec.use_borrowed_chords in {True, False}

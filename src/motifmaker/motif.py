@@ -2,7 +2,10 @@
 
 The functions in this module transform lightweight textual descriptors into a
 fully expanded melodic motif.  They are intentionally deterministic so that
-unit tests and partial regeneration can rely on reproducible results.
+unit tests and partial regeneration can rely on reproducible results.  A
+curated :data:`MOTIF_LIBRARY` containing reusable contour archetypes underpins
+the generation pipeline, enabling quick comparisons across more than a dozen
+named shapes such as ``"pendulum"`` or ``"sparkle"``.
 """
 
 from __future__ import annotations
@@ -10,8 +13,6 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Dict, Iterable, List, Sequence, TypedDict
-
-import numpy as np
 
 if TYPE_CHECKING:  # pragma: no cover - typing helper
     import pretty_midi
@@ -70,16 +71,30 @@ class Motif:
         return sum(note.duration_beats for note in self.notes)
 
 
-_STYLE_CONTOURS: Dict[str, Sequence[int]] = {
-    "ascending_arc": (0, 2, 4, 7, 5, 2, 0),
+MOTIF_LIBRARY: Dict[str, Sequence[int]] = {
+    "ascending_arc": (0, 1, 2, 4, 5, 7, 8),
+    "ascending_return": (0, 2, 4, 5, 4, 2, 0),
     "wavering": (0, 1, 0, 2, 1, 2, 0),
-    "zigzag": (0, 4, 1, 5, 2, 6, 3),
+    "zigzag": (0, 3, 1, 4, 2, 5, 3),
+    "cascade": (5, 4, 3, 2, 1, 0, 0),
+    "rising_steps": (0, 1, 2, 3, 4, 5, 6),
+    "pendulum": (3, 1, 4, 2, 5, 3, 0),
+    "leap_return": (0, 4, 1, 5, 2, 6, 3),
+    "descending_wave": (6, 5, 4, 3, 2, 1, 0),
+    "syncopated_push": (0, 2, 5, 3, 6, 4, 7),
+    "lament": (5, 4, 3, 2, 1, 0, 2),
+    "sparkle": (0, 4, 6, 5, 7, 9, 8),
+    "climb_hold": (0, 2, 4, 6, 6, 4, 2),
+    "neighbor_dance": (2, 1, 3, 2, 4, 3, 5),
+    "arched_wave": (0, 3, 5, 7, 5, 3, 0),
+    "expansion": (0, 2, 5, 7, 9, 12, 9),
+    "breathing": (0, 2, 1, 3, 2, 4, 3),
 }
 
 _CONTOUR_FALLBACKS: Dict[str, Sequence[int]] = {
     "wave": (0, 2, 5, 2, 0),
     "descending": (5, 4, 2, 0),
-    "ascending-return": (0, 2, 4, 2, 0),
+    "ascending-return": MOTIF_LIBRARY["ascending_return"],
 }
 
 _DENSITY_DURATIONS: Dict[str, Sequence[float]] = {
@@ -119,8 +134,10 @@ def _contour_from_style(contour: str | None, style: str | None) -> Sequence[int]
         Sequence of scale-degree steps that describe the melodic contour.
     """
 
-    if style and style in _STYLE_CONTOURS:
-        return _STYLE_CONTOURS[style]
+    if style and style in MOTIF_LIBRARY:
+        return MOTIF_LIBRARY[style]
+    if contour and contour in MOTIF_LIBRARY:
+        return MOTIF_LIBRARY[contour]
     if contour and contour in _CONTOUR_FALLBACKS:
         return _CONTOUR_FALLBACKS[contour]
     return _CONTOUR_FALLBACKS["ascending-return"]
@@ -146,15 +163,17 @@ def _determine_pitch(scale: Sequence[int], step: int, root_pitch: int) -> int:
 
     Args:
         scale: Sequence of semitone offsets describing the chosen scale.
-        step: Index into the scale sequence.
+        step: Index into the scale sequence. Supports negative values and octave wraps.
         root_pitch: MIDI pitch representing the tonic.
 
     Returns:
         MIDI pitch after combining ``root_pitch`` with the selected scale step.
     """
 
-    clamped = int(np.clip(step, 0, len(scale) - 1))
-    return root_pitch + scale[clamped]
+    if not scale:
+        return root_pitch
+    octave, index = divmod(int(step), len(scale))
+    return root_pitch + scale[index] + 12 * octave
 
 
 def generate_motif(spec: MotifSpec) -> Motif:
@@ -204,6 +223,9 @@ def generate_motif(spec: MotifSpec) -> Motif:
     )
 
     return Motif(notes=notes)
+
+
+__all__ = ["MOTIF_LIBRARY", "Motif", "MotifNote", "generate_motif", "motif_to_midi"]
 
 
 def motif_to_midi(

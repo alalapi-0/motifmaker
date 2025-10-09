@@ -9,9 +9,12 @@ from __future__ import annotations
 
 import logging
 import re
+from copy import deepcopy
 from typing import Dict, List
 
 logger = logging.getLogger(__name__)
+
+from .motif import MOTIF_LIBRARY
 
 # 情绪场景预设，覆盖常见风格并给出完整的 6 点张力曲线。
 SCENARIO_PRESETS: List[tuple[List[str], Dict[str, object]]] = [
@@ -176,6 +179,11 @@ STYLE_KEYWORDS = {
     "民谣": "folk-chamber",
     "预告": "epic-trailer",
     "原声": "fresh-acoustic",
+    "lofi": "lofi-study",
+    "lo-fi": "lofi-study",
+    "8bit": "retro-chiptune",
+    "像素": "retro-chiptune",
+    "芯片": "retro-chiptune",
 }
 
 INSTRUMENT_HINTS = {
@@ -216,6 +224,10 @@ MOTIF_STYLE_KEYWORDS = {
     "曲折": "zigzag",
     "之字": "zigzag",
     "平滑": "ascending_return",
+    "摆动": "pendulum",
+    "阶梯": "rising_steps",
+    "瀑布": "cascade",
+    "跳跃": "leap_return",
 }
 
 RHYTHM_DENSITY_KEYWORDS = {
@@ -238,6 +250,10 @@ SECONDARY_DOMINANT_KEYWORDS = ("二级属", "secondary dominant")
 
 BPM_PATTERN = re.compile(r"(\d{2,3})\s*(?:BPM|bpm|拍)")
 METER_PATTERN = re.compile(r"(\d\s*/\s*\d)")
+KEY_MODE_PATTERN = re.compile(
+    r"\b([A-G](?:#|b)?)\s*(?:调)?\s*(大调|小调|major|minor)\b",
+    re.IGNORECASE,
+)
 FORM_SEQUENCE_PATTERN = re.compile(
     r"((?:Intro|Outro|Bridge|A|B|C)(?:[′']?)(?:\s*[-–—]\s*(?:Intro|Outro|Bridge|A|B|C)(?:[′']?))+)",
     re.IGNORECASE,
@@ -245,6 +261,77 @@ FORM_SEQUENCE_PATTERN = re.compile(
 
 _DEFAULT_TENSION = [30, 45, 60, 70, 50, 35]
 _ALLOWED_METERS = {"4/4", "3/4"}
+_ALLOWED_KEYS = {"C", "G", "D", "A", "E", "F", "Bb"}
+
+_MODE_KEYWORDS = {"major": "major", "minor": "minor"}
+
+_HUMANIZE_DISABLE = (
+    "humanization off",
+    "no humanization",
+    "disable humanization",
+    "关闭人性化",
+    "取消人性化",
+)
+_HUMANIZE_ENABLE = (
+    "humanization",
+    "humanize",
+    "人性化",
+    "human feel",
+)
+
+_BORROWED_CHORD_KEYWORDS = ("借用和弦", "bvii", "bvi", "调式混合")
+
+STYLE_TEMPLATE_LIBRARY: Dict[str, Dict[str, object]] = {
+    "lofi": {
+        "name": "lofi",
+        "progressions": [
+            ["Imaj7", "vi7", "ii7", "V7"],
+            ["Imaj7", "IVmaj7", "iii7", "vi7"],
+        ],
+        "beat_patterns": ["lazy-swing", "dusty-backbeat"],
+        "instrumentation": [
+            "electric-piano",
+            "vinyl-kit",
+            "sub-bass",
+            "synth-pad",
+        ],
+    },
+    "jazz": {
+        "name": "jazz",
+        "progressions": [
+            ["ii7", "V7", "Imaj7", "vi7"],
+            ["iii7", "VI7", "ii7", "V7"],
+        ],
+        "beat_patterns": ["ride-swing", "walking-quarter"],
+        "instrumentation": ["piano", "saxophone", "upright-bass", "drums"],
+    },
+    "trailer": {
+        "name": "trailer",
+        "progressions": [
+            ["i", "bVI", "bVII", "i"],
+            ["i", "iv", "V", "i"],
+        ],
+        "beat_patterns": ["pulsing-quarters", "low-toms-build"],
+        "instrumentation": ["strings", "brass", "choir", "percussion"],
+    },
+    "chiptune": {
+        "name": "chiptune",
+        "progressions": [
+            ["I", "VI", "III", "VII"],
+            ["I", "IV", "V", "IV"],
+        ],
+        "beat_patterns": ["square-arpeggio", "8bit-backbeat"],
+        "instrumentation": ["square-lead", "triangle-bass", "noise-kit"],
+    },
+}
+
+_STYLE_TEMPLATE_ALIASES = {
+    "lofi-study": "lofi",
+    "modern-jazz": "jazz",
+    "epic-trailer": "trailer",
+    "retro-chiptune": "chiptune",
+    "chiptune": "chiptune",
+}
 
 
 def _normalise(text: str) -> str:
@@ -375,8 +462,35 @@ def _detect_harmony_level(prompt: str) -> str | None:
     return None
 
 
-def _extract_numeric_overrides(prompt: str) -> Dict[str, object]:
-    """解析显式写出的 BPM 与拍号覆盖。"""
+def _normalise_key(value: str) -> str:
+    """Ensure requested key is supported by downstream modules."""
+
+    if not value:
+        return "C"
+    canonical = value.strip()
+    if not canonical:
+        return "C"
+    canonical = canonical[0].upper() + canonical[1:]
+    if canonical not in _ALLOWED_KEYS:
+        logger.warning("key 超出支持范围，已回退到 C: %s", canonical)
+        return "C"
+    return canonical
+
+
+def _normalise_mode(value: str) -> str:
+    """Convert arbitrary mode text into ``major``/``minor``."""
+
+    lowered = str(value).lower()
+    if "minor" in lowered or "小调" in lowered:
+        return "minor"
+    if "major" in lowered or "大调" in lowered:
+        return "major"
+    logger.warning("mode 未识别，已回退到 major: %s", value)
+    return "major"
+
+
+def _extract_explicit_overrides(prompt: str) -> Dict[str, object]:
+    """解析显式写出的 BPM、拍号与调式覆盖。"""
 
     overrides: Dict[str, object] = {}
     bpm_match = BPM_PATTERN.search(prompt)
@@ -385,6 +499,26 @@ def _extract_numeric_overrides(prompt: str) -> Dict[str, object]:
     meter_match = METER_PATTERN.search(prompt)
     if meter_match:
         overrides["meter"] = meter_match.group(1).replace(" ", "")
+
+    for match in KEY_MODE_PATTERN.finditer(prompt):
+        raw_key = match.group(1)
+        mode_token = match.group(2)
+        key = raw_key[0].upper() + raw_key[1:]
+        overrides["key"] = key
+        token_lower = mode_token.lower()
+        if "小" in mode_token:
+            overrides["mode"] = "minor"
+        elif "大" in mode_token:
+            overrides["mode"] = "major"
+        else:
+            overrides["mode"] = _MODE_KEYWORDS.get(token_lower, "major")
+
+    lower_prompt = prompt.lower()
+    if "小调" in prompt or "minor" in lower_prompt:
+        overrides["mode"] = "minor"
+    elif "大调" in prompt or "major" in lower_prompt:
+        overrides["mode"] = "major"
+
     return overrides
 
 
@@ -443,6 +577,39 @@ def _merge_instrumentation(base: List[str], additions: List[str]) -> List[str]:
     return result or ["piano"]
 
 
+def _select_style_template(style: str | None) -> Dict[str, object] | None:
+    """返回与风格匹配的模板配置副本。"""
+
+    if not style:
+        return None
+    key = _STYLE_TEMPLATE_ALIASES.get(style, style)
+    template = STYLE_TEMPLATE_LIBRARY.get(key)
+    if not template:
+        return None
+    # 深拷贝以防止后续修改污染常量。
+    return deepcopy(template)
+
+
+def _detect_humanization(prompt: str) -> bool | None:
+    """根据提示判断是否显式开启/关闭 humanization。"""
+
+    lowered = prompt.lower()
+    for keyword in _HUMANIZE_DISABLE:
+        if keyword.lower() in lowered:
+            return False
+    for keyword in _HUMANIZE_ENABLE:
+        if keyword.lower() in lowered:
+            return True
+    return None
+
+
+def _detect_borrowed_chords(prompt: str) -> bool:
+    """检测是否启用借用和弦模板。"""
+
+    lowered = prompt.lower()
+    return any(keyword in lowered for keyword in _BORROWED_CHORD_KEYWORDS)
+
+
 def parse_natural_prompt(text: str) -> Dict[str, object]:
     """将自然语言提示解析为结构化元数据。"""
 
@@ -461,6 +628,12 @@ def parse_natural_prompt(text: str) -> Dict[str, object]:
         meta["style"] = _detect_style(prompt)
 
     instruments = list(meta.get("instrumentation", []))
+    style_template = _select_style_template(meta.get("style"))
+    if style_template:
+        meta["style_template"] = style_template
+        instruments = _merge_instrumentation(
+            instruments, style_template.get("instrumentation", [])
+        )
     additions = _detect_instrumentation(prompt)
     meta["instrumentation"] = _merge_instrumentation(instruments, additions)
 
@@ -491,10 +664,21 @@ def parse_natural_prompt(text: str) -> Dict[str, object]:
     if any(keyword in prompt.lower() for keyword in SECONDARY_DOMINANT_KEYWORDS):
         meta["use_secondary_dominant"] = True
 
-    meta.update(_extract_numeric_overrides(prompt))
+    if _detect_borrowed_chords(prompt):
+        meta["use_borrowed_chords"] = True
+
+    humanization_flag = _detect_humanization(prompt)
+    if humanization_flag is not None:
+        meta["humanization"] = humanization_flag
+
+    meta.update(_extract_explicit_overrides(prompt))
 
     meta["tempo_bpm"] = _clamp_tempo(int(meta.get("tempo_bpm", 100)))
     meta["meter"] = _clamp_meter(str(meta.get("meter", "4/4")))
+    meta["key"] = _normalise_key(str(meta.get("key", "C")))
+    meta["mode"] = _normalise_mode(str(meta.get("mode", "major")))
+
+    meta["available_motifs"] = sorted(MOTIF_LIBRARY.keys())
 
     logger.info(
         "Parsed prompt into meta: key=%s mode=%s style=%s",

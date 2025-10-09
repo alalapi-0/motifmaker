@@ -21,3 +21,13 @@ def test_harmony_levels_affect_chords(tmp_path: Path) -> None:
 
     assert not any(chord.endswith("7") for chord in chords_basic)
     assert any(chord.endswith("7") for chord in chords_colorful)
+
+
+def test_borrowed_chords_toggle(tmp_path: Path) -> None:
+    prompt = "史诗预告片加入借用和弦 bVII bVI"
+    meta = parse_natural_prompt(prompt)
+    spec = default_from_prompt_meta(meta)
+    result = render_project(spec, tmp_path / "borrowed", emit_midi=False)
+    chords = result["sections"]["A"]["chords"]
+    assert any(chord.startswith("bVII") for chord in chords)
+    assert any(chord.startswith("bVI") for chord in chords)

@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Dict, Iterable, List, Tuple, TypedDict
 
+import math
+
 from .errors import RenderError
 from .config import settings
 
@@ -71,6 +73,30 @@ class SectionSummary:
         )
 
 
+def _humanize_offset(index: int, lane: int, scale: float) -> float:
+    """Deterministic sinusoidal offset used for humanization."""
+
+    return math.sin((index + 1) * 1.318 + lane * 0.47) * scale
+
+
+def _humanize_span(start: float, end: float, index: int, lane: int) -> tuple[float, float]:
+    """Apply subtle timing variations to note spans."""
+
+    duration = max(end - start, 1e-4)
+    start_offset = _humanize_offset(index, lane, 0.012)
+    length_offset = _humanize_offset(index + 31, lane, 0.008)
+    new_start = max(0.0, start + start_offset)
+    new_end = max(new_start + 1e-4, new_start + duration + length_offset)
+    return new_start, new_end
+
+
+def _humanize_velocity(velocity: int, index: int, lane: int) -> int:
+    """Return velocity with bounded deterministic variation."""
+
+    delta = int(round(_humanize_offset(index + 59, lane, 9.0)))
+    return max(30, min(127, velocity + delta))
+
+
 def _root_pitch_from_key(key: str) -> int:
     """Map a key string to a MIDI pitch value for the tonic.
 
@@ -121,12 +147,17 @@ def _collect_sections(
         spec,
         sketches,
         use_secondary_dominant=bool(getattr(spec, "use_secondary_dominant", False)),
+        use_borrowed_chords=bool(getattr(spec, "use_borrowed_chords", False)),
     )
     return motifs, sketches, harmony_map
 
 
 def _render_melody(
-    sketches: List[SectionSketch], tempo: float, program: int
+    sketches: List[SectionSketch],
+    tempo: float,
+    program: int,
+    *,
+    humanize: bool = False,
 ) -> "pretty_midi.Instrument":
     """Render melodic line to PrettyMIDI instrument.
 
@@ -142,14 +173,21 @@ def _render_melody(
     pretty_midi = _require_pretty_midi()
     instrument = pretty_midi.Instrument(program=program)
     beat_cursor = 0.0
+    note_index = 0
     for sketch in sketches:
         for note in sketch.notes:
             start = beats_to_seconds(beat_cursor, tempo)
             end = beats_to_seconds(beat_cursor + note.duration_beats, tempo)
+            if humanize:
+                start, end = _humanize_span(start, end, note_index, lane=0)
+                velocity = _humanize_velocity(95, note_index, lane=0)
+            else:
+                velocity = 95
             instrument.notes.append(
-                pretty_midi.Note(pitch=note.pitch, start=start, end=end, velocity=95)
+                pretty_midi.Note(pitch=note.pitch, start=start, end=end, velocity=velocity)
             )
             beat_cursor += note.duration_beats
+            note_index += 1
     return instrument
 
 
@@ -158,6 +196,8 @@ def _render_harmony(
     harmony_map: Dict[str, List[HarmonyEvent]],
     tempo: float,
     program: int,
+    *,
+    humanize: bool = False,
 ) -> "pretty_midi.Instrument":
     """Render harmony layer.
 
@@ -174,16 +214,26 @@ def _render_harmony(
     pretty_midi = _require_pretty_midi()
     instrument = pretty_midi.Instrument(program=program)
     beat_cursor = 0.0
+    event_index = 0
     for sketch in sketches:
         for event in harmony_map.get(sketch.name, []):
             start = beats_to_seconds(beat_cursor + event.start_beat, tempo)
             end = beats_to_seconds(
                 beat_cursor + event.start_beat + event.duration_beats, tempo
             )
-            for pitch in event.pitches:
+            if humanize:
+                start, end = _humanize_span(start, end, event_index, lane=1)
+            for chord_index, pitch in enumerate(event.pitches):
+                chord_start = start
+                if humanize:
+                    chord_start += _humanize_offset(event_index + chord_index, 1, 0.003)
+                    velocity = _humanize_velocity(70, event_index * 5 + chord_index, lane=1)
+                else:
+                    velocity = 70
                 instrument.notes.append(
-                    pretty_midi.Note(pitch=pitch, start=start, end=end, velocity=70)
+                    pretty_midi.Note(pitch=pitch, start=chord_start, end=end, velocity=velocity)
                 )
+            event_index += 1
         beat_cursor += sum(note.duration_beats for note in sketch.notes)
     return instrument
 
@@ -192,6 +242,8 @@ def _render_bass(
     sketches: List[SectionSketch],
     harmony_map: Dict[str, List[HarmonyEvent]],
     tempo: float,
+    *,
+    humanize: bool = False,
 ) -> "pretty_midi.Instrument":
     """Render a simple pedal bass line.
 
@@ -207,22 +259,29 @@ def _render_bass(
     pretty_midi = _require_pretty_midi()
     instrument = pretty_midi.Instrument(program=33)
     beat_cursor = 0.0
+    event_index = 0
     for sketch in sketches:
         for event in harmony_map.get(sketch.name, []):
             start = beats_to_seconds(beat_cursor + event.start_beat, tempo)
             end = beats_to_seconds(
                 beat_cursor + event.start_beat + event.duration_beats, tempo
             )
+            if humanize:
+                start, end = _humanize_span(start, end, event_index, lane=2)
+                velocity = _humanize_velocity(80, event_index, lane=2)
+            else:
+                velocity = 80
             instrument.notes.append(
-                pretty_midi.Note(
-                    pitch=event.bass_pitch, start=start, end=end, velocity=80
-                )
+                pretty_midi.Note(pitch=event.bass_pitch, start=start, end=end, velocity=velocity)
             )
+            event_index += 1
         beat_cursor += sum(note.duration_beats for note in sketch.notes)
     return instrument
 
 
-def _render_percussion(total_beats: float, tempo: float) -> "pretty_midi.Instrument":
+def _render_percussion(
+    total_beats: float, tempo: float, *, humanize: bool = False
+) -> "pretty_midi.Instrument":
     """Render a basic hi-hat pulse for textual demos.
 
     Args:
@@ -236,13 +295,20 @@ def _render_percussion(total_beats: float, tempo: float) -> "pretty_midi.Instrum
     pretty_midi = _require_pretty_midi()
     instrument = pretty_midi.Instrument(program=0, is_drum=True)
     beat = 0.0
+    hit_index = 0
     while beat < total_beats:
         start = beats_to_seconds(beat, tempo)
         end = beats_to_seconds(beat + 0.25, tempo)
+        if humanize:
+            start, end = _humanize_span(start, end, hit_index, lane=3)
+            velocity = _humanize_velocity(60, hit_index, lane=3)
+        else:
+            velocity = 60
         instrument.notes.append(
-            pretty_midi.Note(pitch=42, start=start, end=end, velocity=60)
+            pretty_midi.Note(pitch=42, start=start, end=end, velocity=velocity)
         )
         beat += 1.0
+        hit_index += 1
     return instrument
 
 
@@ -472,9 +538,12 @@ def render_project(
             instrumentation = project_spec.instrumentation or ["piano"]
             midi = pretty_midi.PrettyMIDI()
             primary_program = program_for_instrument(instrumentation[0])
+            humanize_flag = bool(getattr(project_spec, "humanization", False))
             if "melody" in active_tracks:
                 midi.instruments.append(
-                    _render_melody(sketches, tempo, primary_program)
+                    _render_melody(
+                        sketches, tempo, primary_program, humanize=humanize_flag
+                    )
                 )
             if "harmony" in active_tracks:
                 harmony_program = (
@@ -483,16 +552,30 @@ def render_project(
                     else 48
                 )
                 midi.instruments.append(
-                    _render_harmony(sketches, harmony_map, tempo, harmony_program)
+                    _render_harmony(
+                        sketches,
+                        harmony_map,
+                        tempo,
+                        harmony_program,
+                        humanize=humanize_flag,
+                    )
                 )
             if "bass" in active_tracks:
-                midi.instruments.append(_render_bass(sketches, harmony_map, tempo))
+                midi.instruments.append(
+                    _render_bass(
+                        sketches, harmony_map, tempo, humanize=humanize_flag
+                    )
+                )
             if "percussion" in active_tracks:
                 total_beats = sum(
                     sum(note.duration_beats for note in sketch.notes)
                     for sketch in sketches
                 )
-                midi.instruments.append(_render_percussion(total_beats, tempo))
+                midi.instruments.append(
+                    _render_percussion(
+                        total_beats, tempo, humanize=humanize_flag
+                    )
+                )
             midi_path = output_path / "track.mid"
             try:
                 midi.write(str(midi_path))
