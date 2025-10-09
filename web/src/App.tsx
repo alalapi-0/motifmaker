@@ -5,6 +5,8 @@ import MelodyPanel from "./components/steps/MelodyPanel";
 import MidiPanel from "./components/steps/MidiPanel";
 import MixPanel, { StyleOption } from "./components/steps/MixPanel";
 import RenderPanel from "./components/steps/RenderPanel";
+import JsonPreviewPanel from "./components/JsonPreviewPanel";
+import { FriendlyErrorState } from "./components/FriendlyError";
 import { generate, renderProject, resolveAssetUrl, RenderSuccess } from "./api";
 
 /**
@@ -29,15 +31,16 @@ const App: React.FC = () => {
   const [prompt, setPrompt] = useState<string>(DEFAULT_PROMPT); // Motif 生成使用的 Prompt。
   const [motifState, setMotifState] = useState<RenderSuccess | null>(null); // 保存后端生成的完整规格。
   const [motifLoading, setMotifLoading] = useState(false); // Motif 生成的加载态。
-  const [motifError, setMotifError] = useState<string | null>(null); // Motif 生成的错误文案。
+  const [motifError, setMotifError] = useState<FriendlyErrorState | null>(null); // Motif 生成的错误文案。
 
   const [melodyNotes, setMelodyNotes] = useState<string>(""); // Melody 阶段记录的旋律笔记。
   const [melodyLocked, setMelodyLocked] = useState(false); // Melody 阶段是否已经确认。
 
   const [arrangementNotes, setArrangementNotes] = useState<string>(""); // MIDI 阶段的结构规划。
   const [arrangementLoading, setArrangementLoading] = useState(false); // MIDI 渲染加载态。
-  const [arrangementError, setArrangementError] = useState<string | null>(null); // MIDI 渲染错误。
+  const [arrangementError, setArrangementError] = useState<FriendlyErrorState | null>(null); // MIDI 渲染错误。
   const [midiUrl, setMidiUrl] = useState<string | null>(null); // 最新的 MIDI 下载地址。
+  const [arrangementReady, setArrangementReady] = useState(false);
 
   const [mixStyle, setMixStyle] = useState<StyleOption>("cinematic"); // 混音阶段选择的渲染风格。
   const [mixIntensity, setMixIntensity] = useState<number>(0.5); // 占位渲染强度，范围 0..1。
@@ -52,6 +55,7 @@ const App: React.FC = () => {
       }
     | null
   >(null); // 音频渲染结果状态。
+  const motifReady = Boolean(motifState);
 
   const [projectId] = useState<string>(() => {
     // 使用时间戳生成项目 ID，保证界面刷新前保持稳定。
@@ -63,6 +67,77 @@ const App: React.FC = () => {
 
   const progress = useMemo(() => step / steps.length, [step]); // 计算底部进度条比例。
 
+  const highestUnlocked = useMemo(() => {
+    let highest = motifReady ? 2 : 1;
+    if (melodyLocked) highest = Math.max(highest, 3);
+    if (arrangementReady) highest = Math.max(highest, 4);
+    if (audioState) highest = steps.length;
+    return Math.max(highest, step);
+  }, [arrangementReady, audioState, melodyLocked, motifReady, step]);
+
+  const { canGoNext, nextDisabledReason, nextLabel } = useMemo(() => {
+    if (step >= steps.length) {
+      return { canGoNext: false, nextDisabledReason: "Final step reached.", nextLabel: "Complete" };
+    }
+    switch (step) {
+      case 1:
+        return {
+          canGoNext: motifReady,
+          nextDisabledReason: motifReady ? null : "Generate a motif to continue.",
+          nextLabel: "Next",
+        };
+      case 2:
+        return {
+          canGoNext: melodyLocked,
+          nextDisabledReason: melodyLocked ? null : "Confirm the melody sketch to proceed.",
+          nextLabel: "Next",
+        };
+      case 3:
+        return {
+          canGoNext: arrangementReady,
+          nextDisabledReason: arrangementReady ? null : "Arrange MIDI before entering the mix console.",
+          nextLabel: "Next",
+        };
+      case 4:
+      default:
+        return {
+          canGoNext: Boolean(audioState),
+          nextDisabledReason: audioState ? null : "Render an audio preview to unlock delivery.",
+          nextLabel: "Next",
+        };
+    }
+  }, [arrangementReady, audioState, melodyLocked, motifReady, step]);
+
+  const handleStepChange = useCallback((target: number) => {
+    setStep(target);
+  }, []);
+
+  const handleBack = useCallback(() => {
+    setStep((prev) => Math.max(prev - 1, 1));
+  }, []);
+
+  const handleNext = useCallback(() => {
+    if (!canGoNext) return;
+    setStep((prev) => Math.min(prev + 1, steps.length));
+  }, [canGoNext]);
+
+  const handlePromptChange = useCallback((value: string) => {
+    setPrompt(value);
+  }, []);
+
+  const handleMelodyNotesChange = useCallback((value: string) => {
+    setMelodyNotes(value);
+    setMelodyLocked(false);
+    setArrangementReady(false);
+    setAudioState(null);
+  }, []);
+
+  const handleArrangementChange = useCallback((value: string) => {
+    setArrangementNotes(value);
+    setArrangementReady(false);
+    setAudioState(null);
+  }, []);
+
   const handleMotifGenerate = useCallback(async () => {
     setMotifLoading(true);
     setMotifError(null);
@@ -71,10 +146,12 @@ const App: React.FC = () => {
       setMotifState(result);
       setMidiUrl(resolveAssetUrl(result.midi));
       setAudioState(null);
-      setStep(2);
+      setArrangementReady(false);
+      setMelodyLocked(false);
+      setStep(1);
     } catch (error) {
-      const message = (error as Error).message || "Failed to generate motif. Please retry.";
-      setMotifError(message);
+      const details = (error as Error).message || "Failed to generate motif. Please retry.";
+      setMotifError({ summary: "Motif generation failed. Please retry.", details });
     } finally {
       setMotifLoading(false);
     }
@@ -82,12 +159,11 @@ const App: React.FC = () => {
 
   const handleMelodyConfirm = useCallback(() => {
     setMelodyLocked(true);
-    setStep(3);
   }, []);
 
   const handleArrange = useCallback(async () => {
     if (!motifState) {
-      setArrangementError("Generate a motif first.");
+      setArrangementError({ summary: "Generate a motif first.", details: null, tone: "neutral" });
       return;
     }
     setArrangementLoading(true);
@@ -97,10 +173,10 @@ const App: React.FC = () => {
       setMotifState(result);
       setMidiUrl(resolveAssetUrl(result.midi));
       setAudioState(null);
-      setStep(4);
+      setArrangementReady(true);
     } catch (error) {
-      const message = (error as Error).message || "Failed to arrange MIDI. Please try again.";
-      setArrangementError(message);
+      const details = (error as Error).message || "Failed to arrange MIDI. Please try again.";
+      setArrangementError({ summary: "Failed to arrange MIDI. Please try again.", details });
     } finally {
       setArrangementLoading(false);
     }
@@ -121,7 +197,7 @@ const App: React.FC = () => {
         style: payload.meta.style,
         intensity: payload.meta.intensity,
       });
-      setStep(5);
+      setArrangementReady(true);
     },
     []
   );
@@ -132,33 +208,36 @@ const App: React.FC = () => {
         return (
           <MotifPanel
             prompt={prompt}
-            onPromptChange={setPrompt}
+            onPromptChange={handlePromptChange}
             onGenerate={handleMotifGenerate}
             loading={motifLoading}
             error={motifError}
             summary={motifSummary}
             projectTitle={projectTitle}
+            hasMotif={motifReady}
           />
         );
       case 2:
         return (
           <MelodyPanel
             notes={melodyNotes}
-            onNotesChange={setMelodyNotes}
+            onNotesChange={handleMelodyNotesChange}
             onConfirm={handleMelodyConfirm}
             disabled={!motifState}
+            locked={melodyLocked}
           />
         );
       case 3:
         return (
           <MidiPanel
             arrangement={arrangementNotes}
-            onArrangementChange={setArrangementNotes}
+            onArrangementChange={handleArrangementChange}
             onArrange={handleArrange}
             loading={arrangementLoading}
             disabled={!melodyLocked}
             midiUrl={midiUrl}
             error={arrangementError}
+            ready={arrangementReady}
           />
         );
       case 4:
@@ -195,12 +274,24 @@ const App: React.FC = () => {
             <p className="text-xs uppercase tracking-[0.4em] text-bloodred">MotifMaker</p>
             <h1 className="mt-2 text-3xl font-semibold text-white">Metal Forge Pipeline</h1>
           </div>
-          <StepIndicator steps={steps} currentStep={step} />
+          <StepIndicator
+            steps={steps}
+            currentStep={step}
+            highestUnlocked={highestUnlocked}
+            onStepChange={handleStepChange}
+            onBack={handleBack}
+            onNext={handleNext}
+            canGoBack={step > 1}
+            canGoNext={canGoNext}
+            nextLabel={nextLabel}
+            nextDisabledReason={nextDisabledReason}
+          />
         </div>
       </header>
       <main className="mx-auto w-full max-w-6xl px-6 py-10">
-        <div key={step} className="animate-metal-fade">
+        <div key={step} className="animate-metal-fade space-y-8">
           {renderStage()}
+          <JsonPreviewPanel data={motifState?.project ?? null} downloadFileName={`${projectId}.json`} />
         </div>
       </main>
       <footer className="fixed bottom-0 left-0 right-0 border-t border-bloodred/30 bg-black/70 backdrop-blur-xl">
