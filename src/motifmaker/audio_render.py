@@ -56,10 +56,66 @@ ensure_dir = ensure_directory
 
 
 def _safe_outputs_dir() -> Path:
-    """中文注释：确保输出目录存在，且禁止目录穿越。"""
+    """中文注释：确保输出目录存在并返回其解析后的绝对路径。"""
 
     out = ensure_dir(OUTPUT_DIR)
-    return out
+    # 中文注释：``resolve`` 可以将相对路径转换为绝对路径，避免在后续拼接时重复出现
+    # ``outputs/outputs`` 等错误目录结构，同时也让越界校验更简单。
+    return Path(out).resolve()
+
+
+def _resolve_under(base: Path, candidate: Path) -> Path:
+    """中文注释：统一的安全路径解析工具，确保 ``candidate`` 位于 ``base`` 下。
+
+    中文设计说明：
+    - 传统的 ``startswith`` 判断仅比较字符串前缀，可能被 ``outputs_backup``
+      等同名前缀目录绕过，因此必须放弃；
+    - 先通过 ``resolve()`` 将基准目录与候选路径转换为绝对形式，可以自动消除
+      ``..``、符号链接等带来的不确定性；
+    - 随后使用 ``relative_to`` 进行严格的祖先关系判断，若抛出 ``ValueError``
+      即代表越界访问，立即转为 ``ValidationError``；
+    - 对于传入 ``outputs/foo.mid`` 这类已经携带根目录名的相对路径，会先剥离
+      重复的首段，保证最终定位到 ``base`` 下的真实文件。
+    """
+
+    resolved_base = base.resolve()
+    # 中文注释：处理传入路径时需要谨慎，既要兼容绝对路径也要兼容 ``outputs/foo.mid``。
+    relative_candidate = candidate
+    if candidate.is_absolute():
+        combined = candidate.resolve()
+        parts = combined.parts
+        if len(parts) > 1 and parts[1] == resolved_base.name:
+            # 中文注释：处理 ``/outputs/foo.mid``，将根目录名剥离后拼回 ``base``。
+            trimmed = Path(*parts[2:]) if len(parts) > 2 else Path(".")
+            combined = (resolved_base / trimmed).resolve()
+        try:
+            combined.relative_to(resolved_base)
+        except ValueError as exc:  # noqa: PERF203
+            raise ValidationError(
+                "midi_path must be inside outputs/",
+                details={"path": str(candidate)},
+            ) from exc
+        return combined
+
+    if not candidate.is_absolute():
+        parts = candidate.parts
+        if parts and parts[0] == resolved_base.name:
+            # 中文注释：若首段已是 ``outputs``，剥离后再拼接，避免 ``outputs/outputs``。
+            relative_candidate = Path(*parts[1:]) if len(parts) > 1 else Path(".")
+        else:
+            relative_candidate = candidate
+        combined = (resolved_base / relative_candidate).resolve()
+        try:
+            combined.relative_to(resolved_base)
+        except ValueError as exc:  # noqa: PERF203
+            raise ValidationError(
+                "midi_path must be inside outputs/",
+                details={"path": str(candidate)},
+            ) from exc
+        return combined
+
+    # 中文注释：默认返回值为 ``candidate`` 已经是绝对路径并通过了祖先校验。
+    return candidate.resolve()
 
 
 def _extension_from_content_type(content_type: str) -> str:
@@ -379,6 +435,7 @@ async def render_audio(
 
     try:
         out_dir = _safe_outputs_dir()
+        # 中文注释：所有后续路径操作都基于 ``out_dir`` 的绝对路径，避免因相对路径导致的误判。
         chosen_midi_path: Optional[Path] = None
 
         provider = AUDIO_PROVIDER.lower()
@@ -403,47 +460,8 @@ async def render_audio(
             chosen_midi_path = tmp_midi
 
         if midi_path and not chosen_midi_path:
-            # 中文注释：校验传入的路径，确保位于 outputs/ 下方，避免目录穿越。
-            base_dir = out_dir
-            incoming = Path(midi_path)
-            try:
-                if incoming.is_absolute():
-                    try:
-                        relative = incoming.relative_to(base_dir)
-                    except ValueError:
-                        incoming_str = str(incoming)
-                        if incoming_str.startswith("/outputs/"):
-                            trimmed = Path(incoming_str.lstrip("/"))
-                            if trimmed.parts and trimmed.parts[0] == base_dir.name:
-                                relative = (
-                                    Path(*trimmed.parts[1:])
-                                    if len(trimmed.parts) > 1
-                                    else Path(trimmed.name)
-                                )
-                            else:
-                                relative = Path(trimmed.name)
-                        else:
-                            raise ValidationError(
-                                "midi_path must be inside outputs/",
-                                details={"path": midi_path},
-                            )
-                else:
-                    parts = incoming.parts
-                    if parts and parts[0] == base_dir.name:
-                        relative = Path(*parts[1:]) if len(parts) > 1 else Path(incoming.name)
-                    else:
-                        relative = incoming
-                resolved = (base_dir / relative).resolve()
-            except ValueError as exc:  # noqa: PERF203
-                raise ValidationError(
-                    "midi_path must be inside outputs/",
-                    details={"path": midi_path},
-                ) from exc
-            if base_dir not in resolved.parents and resolved != base_dir:
-                raise ValidationError(
-                    "midi_path must be inside outputs/",
-                    details={"path": midi_path},
-                )
+            # 中文注释：统一通过 ``_resolve_under`` 校验，兼容相对/绝对路径并严格防止越界。
+            resolved = _resolve_under(out_dir, Path(midi_path))
             if not resolved.exists():
                 raise ValidationError("midi_path not found", details={"path": midi_path})
             if not resolved.is_file():

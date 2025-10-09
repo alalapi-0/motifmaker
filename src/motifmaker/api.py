@@ -534,21 +534,94 @@ async def mix_preview(request: MixRequest) -> dict[str, object]:
     return success_response(MixResponse(wave_url=dummy_url))
 
 
-@app.get("/download")
-async def download_file(path: str) -> FileResponse:
-    """提供输出目录内文件的下载服务，供前端获取 MIDI/JSON。"""
+def _safe_download_path(root: Path, user_path: str) -> Path:
+    """中文注释：下载接口路径校验函数，确保访问受控目录。
 
-    file_path = Path(path)
-    if not file_path.exists():
-        raise ValidationError("文件不存在")
-    resolved = file_path.resolve()
+    设计说明：
+    - 字符串 ``startswith`` 在安全上并不可靠，``outputs_backup`` 等目录会伪装
+      成合法前缀，因此改用 ``resolve`` + ``relative_to`` 严格判断祖先关系；
+    - ``resolve`` 还能消除 ``..`` 与符号链接，避免路径穿越；
+    - 保持对带根目录前缀的相对路径（如 ``outputs/foo.mid``）的兼容性，避免
+      影响既有业务调用。
+    """
+
+    resolved_root = root.resolve()
+    candidate = Path(user_path)
+    # 中文注释：对相对路径进行归一化，若首段已包含根目录名则剥离避免重复。
+    if candidate.is_absolute():
+        resolved_candidate = candidate.resolve()
+        parts = resolved_candidate.parts
+        if len(parts) > 1 and parts[1] == resolved_root.name:
+            # 中文注释：兼容 ``/outputs/foo.mid`` 这类以根目录名开头的绝对路径。
+            trimmed = Path(*parts[2:]) if len(parts) > 2 else Path(".")
+            resolved_candidate = (resolved_root / trimmed).resolve()
+        try:
+            resolved_candidate.relative_to(resolved_root)
+        except ValueError as exc:  # noqa: PERF203
+            raise ValidationError(
+                "禁止访问该路径",
+                details={"path": user_path, "allowed_root": str(resolved_root)},
+            ) from exc
+        return resolved_candidate
+
+    if not candidate.is_absolute():
+        parts = candidate.parts
+        if parts and parts[0] == resolved_root.name:
+            candidate = Path(*parts[1:]) if len(parts) > 1 else Path(".")
+        candidate = (resolved_root / candidate).resolve()
+        try:
+            candidate.relative_to(resolved_root)
+        except ValueError as exc:  # noqa: PERF203
+            raise ValidationError(
+                "禁止访问该路径",
+                details={"path": user_path, "allowed_root": str(resolved_root)},
+            ) from exc
+        return candidate
+
+    # 中文注释：返回绝对路径的解析结果，确保后续文件读取位于允许目录内。
+    return candidate.resolve()
+
+
+@app.get("/download")
+async def download_file(path: str, request: Request) -> FileResponse:
+    """提供输出目录内文件的下载服务，严格验证路径以阻断目录穿越。"""
+
+    client_ip = request.client.host if request.client else "anonymous"
     allowed_roots = [
         Path(settings.output_dir).resolve(),
         Path(settings.projects_dir).resolve(),
     ]
-    if not any(str(resolved).startswith(str(root)) for root in allowed_roots):
-        raise ValidationError("禁止访问该路径")
-    return FileResponse(resolved, filename=file_path.name)
+    matched = False
+    last_error: ValidationError | None = None
+    for root in allowed_roots:
+        try:
+            resolved = _safe_download_path(root, path)
+        except ValidationError as exc:
+            last_error = exc
+            continue
+        matched = True
+        if not resolved.exists():
+            # 中文注释：路径已通过校验但文件缺失，尝试下一候选目录。
+            continue
+        if not resolved.is_file():
+            raise ValidationError(
+                "禁止访问该路径",
+                details={"path": path, "reason": "target is not a file"},
+            )
+        return FileResponse(resolved, filename=resolved.name)
+
+    if matched:
+        # 中文注释：存在合法目录匹配但文件不存在，统一返回缺失提示。
+        raise ValidationError("文件不存在", details={"path": path})
+
+    reason = last_error.message if last_error else "outside allowed roots"
+    logger.warning(
+        "blocked path traversal: ip=%s raw_path=%s reason=%s",
+        client_ip,
+        path,
+        reason,
+    )
+    raise ValidationError("禁止访问该路径", details={"path": path})
 
 
 @app.get("/healthz", response_model=HealthResponse)

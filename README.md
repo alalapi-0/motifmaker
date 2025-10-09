@@ -107,6 +107,12 @@ Prompt → 解析层(parsing) → 骨架JSON(schema) → 动机生成(motif)
   - API Token 仅存放在 `.env`，务必加入 `.gitignore`，禁止提交到仓库；
   - 生产部署建议将生成的音频上传到对象存储/CDN，由静态链接供前端访问。
 
+## Path Safety & Download Rules
+- All file paths are validated by `resolve()` + `relative_to()` against whitelisted roots.
+- Allowed roots: `OUTPUT_DIR`, `PROJECTS_DIR`.
+- Any attempt to access files outside these roots will be rejected with `E_VALIDATION`.
+- Do not rely on string `startswith` checks. We use strict `Path`-based validation.
+
 ### 典型操作流程
 1. 在 Web UI 输入 Prompt 并点击“生成”。
 2. 试听或下载返回的 MIDI；必要时保存工程以便下次载入。
@@ -185,6 +191,9 @@ curl http://localhost:8000/config-public
 ```
 
 仓库已在 `.gitignore` 中忽略 `outputs/`、`projects/`、`*.mid`、`web/node_modules/`、`web/dist/` 等目录，禁止将渲染产物与前端构建文件提交到版本库。
+
+## Troubleshooting
+- **Download returns E_VALIDATION**: ensure the requested path lives inside the configured outputs/projects directories; avoid lookalike folders such as `outputs_backup`.
 
 ## Desktop (Electron)
 
