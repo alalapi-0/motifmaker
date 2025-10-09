@@ -101,6 +101,27 @@ export interface AudioRenderResult {
 }
 
 /**
+ * 异步渲染任务票据结构：/render/ 默认返回 task_id，由前端轮询 /tasks/{id}。
+ */
+export interface RenderTaskTicket {
+  task_id: string;
+}
+
+/**
+ * 任务状态快照，供 UI 展示进度与错误信息。
+ */
+export interface RenderTaskSnapshot {
+  id: string;
+  status: string;
+  progress: number;
+  result?: AudioRenderResult | null;
+  error?: { code?: string; message?: string; details?: unknown } | null;
+  created_at?: string;
+  updated_at?: string;
+  params?: Record<string, unknown>;
+}
+
+/**
  * /healthz 健康检查响应。
  */
 export interface HealthResponse {
@@ -377,9 +398,9 @@ export async function loadProject(
  * 中文注释：错误处理使用 ApiError 统一透传；FormData 便于混合文件与文本字段。
  */
 export async function renderAudio(
-  params: { file?: File; midiPath?: string; style: string; intensity: number },
+  params: { file?: File; midiPath?: string; style: string; intensity: number; sync?: boolean },
   signal?: AbortSignal
-): Promise<AudioRenderResult> {
+): Promise<AudioRenderResult | RenderTaskTicket> {
   const form = new FormData();
   if (params.file) {
     form.append("midi_file", params.file);
@@ -389,7 +410,21 @@ export async function renderAudio(
   }
   form.append("style", params.style);
   form.append("intensity", String(params.intensity));
+  if (params.sync) {
+    form.append("sync", params.sync ? "1" : "0");
+  }
 
+  return createRenderTask(form, signal);
+}
+
+/**
+ * createRenderTask: 向 /render/ 提交 FormData 并解析返回的 task_id 或同步结果。
+ * 中文注释：默认 202 + task_id；开发模式配合 sync=1 可直接返回音频 URL。
+ */
+export async function createRenderTask(
+  form: FormData,
+  signal?: AbortSignal
+): Promise<AudioRenderResult | RenderTaskTicket> {
   const response = await fetch(`${API_BASE}/render/`, {
     method: "POST",
     body: form,
@@ -405,7 +440,7 @@ export async function renderAudio(
 
   const data = payload as {
     ok?: boolean;
-    result?: AudioRenderResult;
+    result?: (AudioRenderResult & RenderTaskTicket) | RenderTaskTicket | undefined;
     error?: { message?: string; code?: string; details?: unknown };
   };
 
@@ -414,7 +449,47 @@ export async function renderAudio(
     throw new ApiError(message, response.status, data.error?.code, data.error?.details);
   }
 
-  return data.result;
+  if ("task_id" in data.result && !("audio_url" in data.result)) {
+    return { task_id: data.result.task_id };
+  }
+
+  return data.result as AudioRenderResult;
+}
+
+/**
+ * getRenderTaskStatus: 轮询 /tasks/{id}，获取异步渲染任务当前状态。
+ */
+export async function getRenderTaskStatus(id: string, signal?: AbortSignal): Promise<RenderTaskSnapshot> {
+  const response = await fetch(`${API_BASE}/tasks/${encodeURIComponent(id)}`, {
+    method: "GET",
+    signal,
+  });
+  if (!response.ok) {
+    throw new ApiError("Failed to fetch render task status.", response.status);
+  }
+  const payload = (await response.json()) as { ok?: boolean; result?: RenderTaskSnapshot };
+  if (!payload.ok || !payload.result) {
+    throw new ApiError("Invalid task response", response.status);
+  }
+  return payload.result;
+}
+
+/**
+ * cancelRenderTask: 向 /tasks/{id} 发送 DELETE，请求后端尽力取消任务。
+ */
+export async function cancelRenderTask(id: string, signal?: AbortSignal): Promise<RenderTaskSnapshot> {
+  const response = await fetch(`${API_BASE}/tasks/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+    signal,
+  });
+  if (!response.ok) {
+    throw new ApiError("Failed to cancel render task.", response.status);
+  }
+  const payload = (await response.json()) as { ok?: boolean; result?: RenderTaskSnapshot };
+  if (!payload.ok || !payload.result) {
+    throw new ApiError("Invalid cancel response", response.status);
+  }
+  return payload.result;
 }
 
 /**

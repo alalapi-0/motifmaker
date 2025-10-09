@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from .audio_render import router as audio_render_router
+from .audio_render import router as audio_render_router, tasks_router as render_tasks_router
 from .config import (
     AUDIO_PROVIDER,
     DAILY_FREE_QUOTA,
@@ -65,6 +65,7 @@ app.mount("/outputs", StaticFiles(directory=OUTPUT_DIR), name="outputs")
 
 # 中文注释：注册音频渲染路由，保持主应用初始化时完成依赖注入。
 app.include_router(audio_render_router)
+app.include_router(render_tasks_router)
 
 
 @app.middleware("http")

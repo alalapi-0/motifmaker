@@ -1,27 +1,28 @@
-"""音频渲染路由实现：支持多种 Provider 及失败重试。
+"""音频渲染逻辑与 API 路由：提供异步任务化的渲染能力。
 
-中文注释：
-- 默认 provider 为 placeholder（本地正弦波），便于离线开发；
-- 当切换到 Hugging Face / Replicate 时需在 .env 中配置 Token，否则会返回
-  E_CONFIG 错误提示；
-- 外部请求内置指数退避重试与总超时保护，防止服务端线程长时间阻塞。
-"""
+中文注释说明：
+- 默认通过内存任务队列异步执行渲染，避免阻塞 FastAPI 事件循环；
+- 对外暴露 /render/ 与 /tasks/ 路由，前端需轮询任务状态获取音频结果；
+- 支持开发模式下的同步调试，生产环境默认走异步流程。"""
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import time
 import wave
 from pathlib import Path
-from typing import Callable, Optional, Tuple
+from typing import Any, Awaitable, Callable, Dict, Optional, Tuple
 
 import httpx
 import numpy as np
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from fastapi.responses import JSONResponse
 
+from . import task_manager
 from .config import (
+    APP_ENV,
     AUDIO_PROVIDER,
     DAILY_FREE_QUOTA,
     HF_API_TOKEN,
@@ -45,13 +46,14 @@ from .errors import (
 from .logging_setup import get_logger
 from .quota import incr_and_check, today_key
 from .ratelimit import rate_limiter
+from .task_manager import TaskSnapshot
 from .utils import ensure_directory
 
-# 中文注释：FastAPI 路由集中在此处，prefix 统一为 /render，方便前端调用。
+# 中文注释：保持原有的 /render 路由前缀，新增任务查询路由。
 router = APIRouter(prefix="/render", tags=["AudioRender"])
+tasks_router = APIRouter(prefix="/tasks", tags=["RenderTasks"])
 logger = get_logger(__name__)
 
-# 中文注释：兼容旧的工具函数命名，避免重复实现。
 ensure_dir = ensure_directory
 
 
@@ -59,33 +61,18 @@ def _safe_outputs_dir() -> Path:
     """中文注释：确保输出目录存在并返回其解析后的绝对路径。"""
 
     out = ensure_dir(OUTPUT_DIR)
-    # 中文注释：``resolve`` 可以将相对路径转换为绝对路径，避免在后续拼接时重复出现
-    # ``outputs/outputs`` 等错误目录结构，同时也让越界校验更简单。
     return Path(out).resolve()
 
 
 def _resolve_under(base: Path, candidate: Path) -> Path:
-    """中文注释：统一的安全路径解析工具，确保 ``candidate`` 位于 ``base`` 下。
-
-    中文设计说明：
-    - 传统的 ``startswith`` 判断仅比较字符串前缀，可能被 ``outputs_backup``
-      等同名前缀目录绕过，因此必须放弃；
-    - 先通过 ``resolve()`` 将基准目录与候选路径转换为绝对形式，可以自动消除
-      ``..``、符号链接等带来的不确定性；
-    - 随后使用 ``relative_to`` 进行严格的祖先关系判断，若抛出 ``ValueError``
-      即代表越界访问，立即转为 ``ValidationError``；
-    - 对于传入 ``outputs/foo.mid`` 这类已经携带根目录名的相对路径，会先剥离
-      重复的首段，保证最终定位到 ``base`` 下的真实文件。
-    """
+    """中文注释：统一的安全路径解析工具，确保 ``candidate`` 位于 ``base`` 下。"""
 
     resolved_base = base.resolve()
-    # 中文注释：处理传入路径时需要谨慎，既要兼容绝对路径也要兼容 ``outputs/foo.mid``。
     relative_candidate = candidate
     if candidate.is_absolute():
         combined = candidate.resolve()
         parts = combined.parts
         if len(parts) > 1 and parts[1] == resolved_base.name:
-            # 中文注释：处理 ``/outputs/foo.mid``，将根目录名剥离后拼回 ``base``。
             trimmed = Path(*parts[2:]) if len(parts) > 2 else Path(".")
             combined = (resolved_base / trimmed).resolve()
         try:
@@ -100,7 +87,6 @@ def _resolve_under(base: Path, candidate: Path) -> Path:
     if not candidate.is_absolute():
         parts = candidate.parts
         if parts and parts[0] == resolved_base.name:
-            # 中文注释：若首段已是 ``outputs``，剥离后再拼接，避免 ``outputs/outputs``。
             relative_candidate = Path(*parts[1:]) if len(parts) > 1 else Path(".")
         else:
             relative_candidate = candidate
@@ -114,15 +100,11 @@ def _resolve_under(base: Path, candidate: Path) -> Path:
             ) from exc
         return combined
 
-    # 中文注释：默认返回值为 ``candidate`` 已经是绝对路径并通过了祖先校验。
     return candidate.resolve()
 
 
 def _extension_from_content_type(content_type: str) -> str:
-    """根据 Content-Type 推断文件扩展名，缺省为 ``.wav``。
-
-    中文注释：外部模型返回的音频格式可能是 mp3/wav/flac，统一在此集中判断。
-    """
+    """根据 Content-Type 推断文件扩展名，缺省为 ``.wav``。"""
 
     content_type = content_type.lower()
     if "wav" in content_type:
@@ -148,79 +130,18 @@ def _decode_base64_audio(payload: str) -> Tuple[bytes, str]:
     return base64.b64decode(payload), ".wav"
 
 
-def _download_audio(url: str, timeout: int) -> Tuple[bytes, str]:
-    """下载远程音频 URL，返回数据与扩展名。"""
-
-    # 中文注释：下载外部资源同样受统一的重试逻辑保护，避免瞬时网络抖动导致失败。
-    with httpx.Client(timeout=timeout) as client:
-        def send() -> httpx.Response:
-            response = client.get(url)
-            response.raise_for_status()
-            return response
-
-        response = request_with_retry(send, timeout=timeout)
-        content_type = response.headers.get("content-type", "audio/wav")
-        suffix = _extension_from_content_type(content_type)
-        return response.content, suffix
-
-
-def _compose_prompt(style: str, intensity: float) -> str:
-    """根据风格与强度构造文本提示，供文本到音乐模型使用。"""
-
-    clipped = max(0.0, min(intensity, 1.0))
-    return f"{style} soundtrack, intensity={clipped:.2f}, 120bpm, 4/4"
-
-
-def _sine_wav(
-    path: Path,
-    seconds: float = 6.0,
-    samplerate: int = 44100,
-    freq: float = 440.0,
-) -> float:
-    """
-    生成一段正弦波 wav（占位渲染），返回时长（秒）。
-    中文注释：在没有接入真实 AI 的情况下，用该方法快速得到可播放的音频文件。
-    """
-
-    t = np.linspace(0, seconds, int(samplerate * seconds), endpoint=False)
-    # 中文注释：加入淡入淡出避免音频瞬态造成爆音，幅度控制在 0.2 以内降低音量。
-    fade = np.linspace(0, 1, len(t))
-    waveform = 0.2 * np.sin(2 * np.pi * freq * t) * fade
-    waveform_int16 = (waveform * 32767).astype(np.int16)
-    with wave.open(str(path), "wb") as wf:
-        wf.setnchannels(1)
-        wf.setsampwidth(2)  # 中文注释：16-bit 采样宽度即可满足占位需求。
-        wf.setframerate(samplerate)
-        wf.writeframes(waveform_int16.tobytes())
-    return seconds
-
-
-def _derive_audio_name(midi_name: str, suffix: str = ".wav") -> str:
-    """中文注释：基于 midi 文件名 + 时间戳派生一个不冲突的音频名称。"""
-
-    stem = Path(midi_name).stem or "track"
-    ts = int(time.time())
-    return f"{stem}_{ts}{suffix}"
-
-
-def request_with_retry(
-    send_func: Callable[[], httpx.Response],
+async def request_with_retry_async(
+    send_async: Callable[[], Awaitable[httpx.Response]],
     *,
     retries: int = 2,
-    backoff: float = 1.5,
-    timeout: int = RENDER_TIMEOUT_SEC,
+    backoff: float = 1.6,
+    timeout: float = RENDER_TIMEOUT_SEC,
 ) -> httpx.Response:
-    """执行带指数退避的请求重试，并在总超时后抛出 ``RenderTimeout``。
-
-    中文注释：
-    - send_func 内部实际发起 HTTP 请求并返回 ``httpx.Response``；
-    - 当响应状态码为 429 或 5xx 时重试，间隔按 backoff 指数增长；
-    - 若累计耗时超过 timeout，则抛出 ``RenderTimeout``，提示客户端稍后重试。
-    """
+    """使用异步客户端实现指数退避的请求重试。"""
 
     attempts = 0
     delay = 1.0
-    deadline = time.monotonic() + max(1, timeout)
+    deadline = time.monotonic() + max(1.0, float(timeout))
     last_exc: Optional[Exception] = None
 
     while attempts <= retries:
@@ -228,13 +149,13 @@ def request_with_retry(
         if remaining <= 0:
             raise RenderTimeout("render provider timed out")
         try:
-            response = send_func()
+            response = await send_async()
             return response
         except RenderTimeout:
             raise
         except httpx.TimeoutException as exc:
             raise RenderTimeout("render provider timed out") from exc
-        except httpx.HTTPStatusError as exc:  # 中文注释：仅对 429/5xx 启用重试，其余直接抛错。
+        except httpx.HTTPStatusError as exc:
             status = exc.response.status_code
             if status == 429 or 500 <= status < 600:
                 last_exc = exc
@@ -252,7 +173,7 @@ def request_with_retry(
 
         sleep_time = min(delay, max(0.0, deadline - time.monotonic()))
         if sleep_time > 0:
-            time.sleep(sleep_time)
+            await asyncio.sleep(sleep_time)
         delay *= backoff
 
     if isinstance(last_exc, RenderError):
@@ -262,21 +183,83 @@ def request_with_retry(
     raise RenderError("provider request failed")
 
 
-def _render_placeholder(midi_path: Path, style: str, intensity: float) -> Tuple[Path, float]:
-    """本地正弦波占位渲染，返回音频路径与时长。"""
+async def _download_audio_async(url: str, timeout: float) -> Tuple[bytes, str]:
+    """异步下载远程音频 URL，返回二进制数据与扩展名。"""
 
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        async def send() -> httpx.Response:
+            response = await client.get(url)
+            response.raise_for_status()
+            return response
+
+        response = await request_with_retry_async(send, timeout=timeout)
+        content_type = response.headers.get("content-type", "audio/wav")
+        suffix = _extension_from_content_type(content_type)
+        return response.content, suffix
+
+
+def _compose_prompt(style: str, intensity: float) -> str:
+    """中文注释：根据风格与强度拼接文本提示，供模型生成音乐参考。"""
+
+    clipped = max(0.0, min(intensity, 1.0))
+    return f"{style} soundtrack, intensity={clipped:.2f}, 120bpm, 4/4"
+
+
+def _sine_wav(
+    path: Path,
+    seconds: float = 6.0,
+    samplerate: int = 44100,
+    freq: float = 440.0,
+) -> float:
+    """中文注释：生成一段指定参数的正弦波音频，用于占位返回。"""
+
+    t = np.linspace(0, seconds, int(samplerate * seconds), endpoint=False)
+    fade = np.linspace(0, 1, len(t))
+    waveform = 0.2 * np.sin(2 * np.pi * freq * t) * fade
+    waveform_int16 = (waveform * 32767).astype(np.int16)
+    with wave.open(str(path), "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(samplerate)
+        wf.writeframes(waveform_int16.tobytes())
+    return seconds
+
+
+def _derive_audio_name(midi_name: str, suffix: str = ".wav") -> str:
+    stem = Path(midi_name).stem or "track"
+    ts = int(time.time())
+    return f"{stem}_{ts}{suffix}"
+
+
+async def _render_placeholder_async(
+    midi_path: Path,
+    style: str,
+    intensity: float,
+    progress: Callable[[int], None],
+) -> Tuple[Path, float]:
+    """中文注释：本地占位渲染，使用线程池避免阻塞主事件循环。"""
+
+    progress(20)
     out_dir = _safe_outputs_dir()
-    seconds = float(min(RENDER_MAX_SECONDS, 6))
+    seconds = float(min(RENDER_MAX_SECONDS, 3))
     out_path = out_dir / _derive_audio_name(midi_path.name, ".wav")
     base_freq = 440.0
     freq = base_freq + max(0.0, min(intensity, 1.0)) * 100.0
-    duration = _sine_wav(out_path, seconds=seconds, freq=freq)
+    duration = await asyncio.to_thread(_sine_wav, out_path, seconds=seconds, freq=freq)
+    progress(90)
     return out_path, duration
 
 
-def _render_hf(midi_path: Path, style: str, intensity: float, timeout: int) -> Tuple[Path, float]:
-    """调用 Hugging Face Inference Endpoint 生成音频。"""
+async def _render_hf_async(
+    midi_path: Path,
+    style: str,
+    intensity: float,
+    timeout: float,
+    progress: Callable[[int], None],
+) -> Tuple[Path, float]:
+    """中文注释：异步调用 Hugging Face 推理接口并轮询结果。"""
 
+    progress(15)
     prompt = _compose_prompt(style, intensity)
     url = HF_MODEL if HF_MODEL.startswith("http") else f"https://api-inference.huggingface.co/models/{HF_MODEL}"
     headers = {
@@ -285,16 +268,15 @@ def _render_hf(midi_path: Path, style: str, intensity: float, timeout: int) -> T
     }
     out_dir = _safe_outputs_dir()
 
-    with httpx.Client(timeout=timeout) as client:
-        def send() -> httpx.Response:
-            response = client.post(url, headers=headers, json={"inputs": prompt})
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        async def send() -> httpx.Response:
+            response = await client.post(url, headers=headers, json={"inputs": prompt})
             if response.status_code == 202:
-                # 中文注释：202 表示模型加载中，主动抛出以触发重试。
                 raise httpx.HTTPStatusError("model loading", request=response.request, response=response)
             response.raise_for_status()
             return response
 
-        response = request_with_retry(send, timeout=timeout)
+        response = await request_with_retry_async(send, timeout=timeout)
 
     content_type = response.headers.get("content-type", "application/json")
     suffix = ".wav"
@@ -309,31 +291,32 @@ def _render_hf(midi_path: Path, style: str, intensity: float, timeout: int) -> T
         except json.JSONDecodeError as exc:
             raise RenderError("unexpected hugging face response", details={"content_type": content_type}) from exc
 
-        # 中文注释：不同模型回参不统一，按常见字段尝试解析。
         if isinstance(payload, dict):
             candidate = payload.get("audio") or payload.get("generated_audio") or payload.get("output")
             if isinstance(candidate, list) and candidate:
                 candidate = candidate[0]
             if isinstance(candidate, str):
                 if candidate.startswith("http"):
-                    audio_bytes, suffix = _download_audio(candidate, timeout)
+                    audio_bytes, suffix = await _download_audio_async(candidate, timeout)
                 else:
                     audio_bytes, suffix = _decode_base64_audio(candidate)
         if audio_bytes is None:
             raise RenderError("hugging face response missing audio", details={"payload": payload})
 
     out_path = out_dir / _derive_audio_name(midi_path.name, suffix)
-    out_path.write_bytes(audio_bytes)
+    await asyncio.to_thread(out_path.write_bytes, audio_bytes)
+    progress(95)
     return out_path, float(RENDER_MAX_SECONDS)
 
 
-def _render_replicate(
+async def _render_replicate_async(
     midi_path: Path,
     style: str,
     intensity: float,
-    timeout: int,
+    timeout: float,
+    progress: Callable[[int], None],
 ) -> Tuple[Path, float]:
-    """调用 Replicate Prediction API 渲染音频并保存到本地。"""
+    """中文注释：使用 Replicate 异步预测 API 生成音频并跟踪进度。"""
 
     prompt = _compose_prompt(style, intensity)
     headers = {
@@ -350,13 +333,13 @@ def _render_replicate(
     out_dir = _safe_outputs_dir()
     start = time.monotonic()
 
-    with httpx.Client(timeout=timeout) as client:
-        def create_prediction() -> httpx.Response:
-            response = client.post("https://api.replicate.com/v1/predictions", headers=headers, json=payload)
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        async def create_prediction() -> httpx.Response:
+            response = await client.post("https://api.replicate.com/v1/predictions", headers=headers, json=payload)
             response.raise_for_status()
             return response
 
-        creation = request_with_retry(create_prediction, timeout=timeout)
+        creation = await request_with_retry_async(create_prediction, timeout=timeout)
         data = creation.json()
         prediction_id = data.get("id")
         if not prediction_id:
@@ -368,17 +351,19 @@ def _render_replicate(
 
         poll_url = f"https://api.replicate.com/v1/predictions/{prediction_id}"
         poll_delay = 2.0
+        current_progress = 20
+        progress(current_progress)
 
         while True:
             if time.monotonic() - start > timeout:
                 raise RenderTimeout("replicate polling timed out")
 
-            def poll() -> httpx.Response:
-                response = client.get(poll_url, headers=headers)
+            async def poll() -> httpx.Response:
+                response = await client.get(poll_url, headers=headers)
                 response.raise_for_status()
                 return response
 
-            poll_resp = request_with_retry(poll, timeout=timeout)
+            poll_resp = await request_with_retry_async(poll, timeout=timeout)
             payload = poll_resp.json()
             status = payload.get("status")
             if status == "succeeded":
@@ -386,35 +371,107 @@ def _render_replicate(
                 audio_url = outputs[-1] if isinstance(outputs, list) and outputs else None
                 if not audio_url or not isinstance(audio_url, str):
                     raise RenderError("replicate response missing audio url", details={"payload": payload})
-                audio_bytes, suffix = _download_audio(audio_url, timeout)
+                audio_bytes, suffix = await _download_audio_async(audio_url, timeout)
                 out_path = out_dir / _derive_audio_name(midi_path.name, suffix)
-                out_path.write_bytes(audio_bytes)
+                await asyncio.to_thread(out_path.write_bytes, audio_bytes)
+                progress(95)
                 return out_path, float(RENDER_MAX_SECONDS)
             if status == "failed":
                 raise RenderError("replicate prediction failed", details={"payload": payload})
-            time.sleep(poll_delay)
+            await asyncio.sleep(poll_delay)
+            current_progress = min(90, current_progress + 5)
+            progress(current_progress)
 
 
-def render_via_provider(midi_path: Path, style: str, intensity: float) -> Tuple[Path, float]:
-    """
-    中文注释：真实渲染入口，根据 AUDIO_PROVIDER 分发到具体实现。
-    - placeholder：调用本地正弦波占位；
-    - hf：调用 Hugging Face Inference API；
-    - replicate：调用 Replicate Prediction API。
-    """
+async def render_via_provider_async(
+    midi_path: Path,
+    style: str,
+    intensity: float,
+    *,
+    progress_callback: Optional[Callable[[int], None]] = None,
+) -> Tuple[Path, float]:
+    """中文注释：统一的 Provider 分发入口，并在关键节点回写进度。"""
 
+    progress = progress_callback or (lambda _p: None)
+    progress(10)
     provider = AUDIO_PROVIDER.lower()
     if provider == "placeholder":
-        return _render_placeholder(midi_path, style, intensity)
+        return await _render_placeholder_async(midi_path, style, intensity, progress)
     if provider == "hf":
         if not HF_API_TOKEN:
             raise ConfigError("provider token missing", details={"provider": "hf"})
-        return _render_hf(midi_path, style, intensity, RENDER_TIMEOUT_SEC)
+        return await _render_hf_async(midi_path, style, intensity, RENDER_TIMEOUT_SEC, progress)
     if provider == "replicate":
         if not REPLICATE_API_TOKEN:
             raise ConfigError("provider token missing", details={"provider": "replicate"})
-        return _render_replicate(midi_path, style, intensity, RENDER_TIMEOUT_SEC)
+        return await _render_replicate_async(midi_path, style, intensity, RENDER_TIMEOUT_SEC, progress)
     raise ConfigError("unknown audio provider", details={"provider": AUDIO_PROVIDER})
+
+
+def _normalize_bool(value: Any) -> bool:
+    """中文注释：兼容各种布尔表示（数字、字符串）统一转换为 bool。"""
+
+    if value is None:
+        return False
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return False
+
+
+async def _prepare_midi_file(
+    midi_file: Optional[UploadFile],
+    midi_path: Optional[str],
+) -> Path:
+    """中文注释：处理上传或已有 MIDI 路径并返回标准化后的文件路径。"""
+
+    out_dir = _safe_outputs_dir()
+    chosen_midi_path: Optional[Path] = None
+
+    if midi_file is not None:
+        original_name = midi_file.filename or "input.mid"
+        suffix = Path(original_name).suffix or ".mid"
+        temp_name = f"upload_{int(time.time())}{suffix}"
+        tmp_midi = out_dir / temp_name
+        content = await midi_file.read()
+        if not content:
+            raise ValidationError(
+                "uploaded midi file is empty",
+                details={"reason": "midi_file is empty"},
+            )
+        await asyncio.to_thread(tmp_midi.write_bytes, content)
+        chosen_midi_path = tmp_midi
+
+    if midi_path and not chosen_midi_path:
+        resolved = _resolve_under(out_dir, Path(midi_path))
+        if not resolved.exists():
+            raise ValidationError("midi_path not found", details={"path": midi_path})
+        if not resolved.is_file():
+            raise ValidationError("midi_path must be a file", details={"path": midi_path})
+        chosen_midi_path = resolved
+
+    if not chosen_midi_path:
+        raise ValidationError("either midi_file or midi_path is required")
+    return chosen_midi_path
+
+
+def _rate_limit_check(email: Optional[str], client_ip: str) -> tuple[bool, str, str]:
+    """中文注释：执行每日免费额度校验，返回是否为 Pro 用户及使用的身份标识。"""
+
+    is_pro = bool(email and email in PRO_USER_EMAILS)
+    if is_pro:
+        return True, client_ip, email or ""
+    day, quota_key = today_key(email or client_ip)
+    allowed = incr_and_check(day, quota_key, DAILY_FREE_QUOTA)
+    if not allowed:
+        raise RateLimitError(
+            "daily free quota exceeded",
+            details={"quota": DAILY_FREE_QUOTA, "key": quota_key},
+        )
+    return False, client_ip, email or ""
 
 
 @router.post("/")
@@ -422,112 +479,175 @@ async def render_audio(
     request: Request,
     midi_file: Optional[UploadFile] = File(default=None),
     midi_path: Optional[str] = Form(default=None),
-    style: str = Form(default="cinematic"),
-    intensity: float = Form(default=0.5),
+    style: Optional[str] = Form(default="cinematic"),
+    intensity: Optional[float] = Form(default=0.5),
+    sync_form: Optional[str] = Form(default=None),
     _: None = Depends(rate_limiter),
 ):
-    """
-    中文说明：
-    - 支持二选一输入：上传的 midi_file 或已有的 midi_path（outputs 内）；
-    - 使用占位或远程服务生成音频，并返回可访问的 audio_url；
-    - 引入每日免费额度与 Pro 白名单，防止无限制调用导致成本失控。
-    """
+    """中文注释：创建渲染任务，默认异步排队；开发环境可通过 sync 参数调试同步模式。"""
 
     try:
-        out_dir = _safe_outputs_dir()
-        # 中文注释：所有后续路径操作都基于 ``out_dir`` 的绝对路径，避免因相对路径导致的误判。
-        chosen_midi_path: Optional[Path] = None
-
         provider = AUDIO_PROVIDER.lower()
         if provider == "hf" and not HF_API_TOKEN:
             raise ConfigError("provider token missing", details={"provider": "hf"})
         if provider == "replicate" and not REPLICATE_API_TOKEN:
             raise ConfigError("provider token missing", details={"provider": "replicate"})
 
-        if midi_file is not None:
-            # 中文注释：将上传的 MIDI 存到 outputs，文件名加时间戳避免覆盖。
-            original_name = midi_file.filename or "input.mid"
-            suffix = Path(original_name).suffix or ".mid"
-            temp_name = f"upload_{int(time.time())}{suffix}"
-            tmp_midi = out_dir / temp_name
-            content = await midi_file.read()
-            if not content:
-                raise ValidationError(
-                    "uploaded midi file is empty",
-                    details={"reason": "midi_file is empty"},
-                )
-            tmp_midi.write_bytes(content)
-            chosen_midi_path = tmp_midi
+        sync_requested = _normalize_bool(request.query_params.get("sync"))
+        if not sync_requested and sync_form is not None:
+            sync_requested = _normalize_bool(sync_form)
 
-        if midi_path and not chosen_midi_path:
-            # 中文注释：统一通过 ``_resolve_under`` 校验，兼容相对/绝对路径并严格防止越界。
-            resolved = _resolve_under(out_dir, Path(midi_path))
-            if not resolved.exists():
-                raise ValidationError("midi_path not found", details={"path": midi_path})
-            if not resolved.is_file():
-                raise ValidationError("midi_path must be a file", details={"path": midi_path})
-            chosen_midi_path = resolved
+        json_payload: Dict[str, Any] = {}
+        if request.headers.get("content-type", "").startswith("application/json"):
+            json_payload = await request.json()
+            if "sync" in json_payload:
+                sync_requested = _normalize_bool(json_payload.get("sync"))
+            midi_path = midi_path or json_payload.get("midi_path")
+            style = style or json_payload.get("style", "cinematic")
+            intensity = intensity if intensity is not None else json_payload.get("intensity", 0.5)
 
-        if not chosen_midi_path:
-            raise ValidationError("either midi_file or midi_path is required")
-
-        # 中文注释：按请求头优先使用 email 作为配额键，其次回退到客户端 IP。
+        chosen_midi_path = await _prepare_midi_file(midi_file, midi_path)
         client_ip = request.client.host if request.client else "anonymous"
         raw_email = request.headers.get("X-User-Email")
         email = raw_email.lower() if raw_email else None
-        is_pro = bool(email and email in PRO_USER_EMAILS)
-        if not is_pro:
-            day, quota_key = today_key(email or client_ip)
-            allowed = incr_and_check(day, quota_key, DAILY_FREE_QUOTA)
-            if not allowed:
-                raise RateLimitError(
-                    "daily free quota exceeded",
-                    details={"quota": DAILY_FREE_QUOTA, "key": quota_key},
+        # 中文注释：配额计算涉及 SQLite 写入，放到线程池中执行以避免阻塞事件循环。
+        is_pro, client_ip, identity = await asyncio.to_thread(_rate_limit_check, email, client_ip)
+        params = {
+            "midi_path": str(chosen_midi_path),
+            "style": style or "cinematic",
+            "intensity": float(intensity or 0.5),
+            "identity": identity or client_ip,
+            "tier": "pro" if is_pro else "free",
+        }
+
+        async def job(task_id: str) -> Dict[str, Any]:
+            progress_cb = lambda p: task_manager.update_progress(task_id, p)
+            progress_cb(5)
+            try:
+                out_audio, duration = await render_via_provider_async(
+                    chosen_midi_path,
+                    style=params["style"],
+                    intensity=params["intensity"],
+                    progress_callback=progress_cb,
                 )
+            except RenderTimeout:
+                raise
+            except (RenderError, ConfigError, RateLimitError):
+                raise
+            except MMError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("render provider failure")
+                raise RenderError(
+                    "render provider failed",
+                    details={"provider": AUDIO_PROVIDER, "reason": str(exc)},
+                ) from exc
 
-        try:
-            out_audio, duration = render_via_provider(
-                chosen_midi_path,
-                style=style,
-                intensity=float(intensity),
+            audio_url = f"/outputs/{out_audio.name}"
+            result = {
+                "audio_url": audio_url,
+                "duration_sec": duration,
+                "renderer": AUDIO_PROVIDER,
+                "style": params["style"],
+                "intensity": params["intensity"],
+            }
+            progress_cb(100)
+            return result
+
+        task_id = task_manager.create_task(job, params=params)
+        logger.info(
+            "render task created task_id=%s midi=%s style=%s intensity=%s", task_id, params["midi_path"], params["style"], params["intensity"]
+        )
+
+        sync_allowed = APP_ENV in {"dev", "development", "local"}
+        if sync_requested and not sync_allowed:
+            # 中文注释：生产环境禁用同步模式，避免误用导致请求超时。
+            logger.info("sync mode requested but disabled in environment env=%s", APP_ENV)
+            sync_requested = False
+
+        if sync_requested:
+            snapshot = await task_manager.wait(task_id)
+            if snapshot and snapshot.status == "done" and isinstance(snapshot.result, dict):
+                return JSONResponse({"ok": True, "result": snapshot.result})
+            if snapshot and snapshot.status == "failed" and snapshot.error:
+                err_payload = snapshot.error
+                status = 500
+                if isinstance(err_payload, dict) and "code" in err_payload:
+                    status_map = {
+                        "E_VALIDATION": 400,
+                        "E_RATE_LIMIT": 429,
+                        "E_CONFIG": 400,
+                        "E_RENDER_TIMEOUT": 504,
+                        "E_RENDER": 500,
+                    }
+                    status = int(err_payload.get("http_status") or status_map.get(err_payload.get("code"), 500))
+                return JSONResponse({"ok": False, "error": err_payload}, status_code=status)
+            return JSONResponse(
+                {"ok": True, "result": {"task_id": task_id}},
+                status_code=202,
             )
-        except RenderTimeout:
-            raise
-        except (RenderError, ConfigError, RateLimitError):
-            raise
-        except MMError:
-            raise
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("render provider failure")
-            raise RenderError(
-                "render provider failed",
-                details={"provider": AUDIO_PROVIDER, "reason": str(exc)},
-            ) from exc
-
-        audio_url = f"/outputs/{out_audio.name}"
 
         return JSONResponse(
-            {
-                "ok": True,
-                "result": {
-                    "audio_url": audio_url,
-                    "duration_sec": duration,
-                    "renderer": AUDIO_PROVIDER,
-                    "style": style,
-                    "intensity": float(intensity),
-                },
-            }
+            {"ok": True, "result": {"task_id": task_id}},
+            status_code=202,
         )
 
     except MMError as err:
-        # 中文注释：统一记录业务异常，方便观察错误码与上下文。
         logger.error("render error: %s", err)
         return JSONResponse(error_response(err), status_code=err.http_status)
     except Exception as exc:  # noqa: BLE001
-        # 中文注释：兜底异常，防止堆栈泄露给客户端，同时记录日志排查。
         logger.exception("render internal error")
         err = RenderError("internal rendering error")
         return JSONResponse(error_response(err), status_code=500)
 
 
-__all__ = ["router", "render_via_provider", "request_with_retry"]
+@tasks_router.get("/{task_id}")
+async def get_task(task_id: str) -> JSONResponse:
+    """中文注释：查询指定任务的执行状态与进度。"""
+
+    snapshot = task_manager.get(task_id)
+    if not snapshot:
+        err = ValidationError("task not found", details={"task_id": task_id})
+        return JSONResponse(error_response(err), status_code=err.http_status)
+    payload = _snapshot_to_payload(snapshot)
+    return JSONResponse({"ok": True, "result": payload})
+
+
+@tasks_router.delete("/{task_id}")
+async def cancel_task(task_id: str) -> JSONResponse:
+    """中文注释：尽力取消指定任务，若任务已完成则直接返回最新状态。"""
+
+    snapshot = task_manager.get(task_id)
+    if not snapshot:
+        err = ValidationError("task not found", details={"task_id": task_id})
+        return JSONResponse(error_response(err), status_code=err.http_status)
+    cancelled = task_manager.cancel(task_id)
+    if not cancelled and snapshot.status not in {"done", "failed", "cancelled"}:
+        err = RenderError("task could not be cancelled", details={"status": snapshot.status})
+        return JSONResponse(error_response(err), status_code=409)
+    updated = task_manager.get(task_id)
+    payload = _snapshot_to_payload(updated or snapshot)
+    return JSONResponse({"ok": True, "result": payload})
+
+
+def _snapshot_to_payload(snapshot: TaskSnapshot) -> Dict[str, Any]:
+    """中文注释：将任务快照转换为可序列化的 JSON 字典结构。"""
+
+    return {
+        "id": snapshot.id,
+        "status": snapshot.status,
+        "progress": snapshot.progress,
+        "result": snapshot.result,
+        "error": snapshot.error,
+        "created_at": snapshot.created_at.isoformat(),
+        "updated_at": snapshot.updated_at.isoformat(),
+        "params": snapshot.params,
+    }
+
+
+__all__ = [
+    "router",
+    "tasks_router",
+    "render_via_provider_async",
+    "request_with_retry_async",
+]
