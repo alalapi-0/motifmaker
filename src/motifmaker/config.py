@@ -98,6 +98,8 @@ settings = Settings.from_env()
 
 # 中文注释：输出目录常量供路由等模块引用，保持配置来源单一。
 OUTPUT_DIR = settings.output_dir
+# 中文注释：工程目录同样暴露常量，便于测试及 API 校验统一引用。
+PROJECTS_DIR = settings.projects_dir
 
 # 中文注释：将常用配置以常量暴露，方便渲染与限流模块直接引用，避免层层传参。
 AUDIO_PROVIDER: str = settings.audio_provider.lower()
