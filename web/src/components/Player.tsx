@@ -4,33 +4,59 @@ import * as Tone from "tone";
 import { useI18n } from "../hooks/useI18n";
 
 export interface PlayerProps {
-  midiUrl: string | null; // 可播放的 MIDI 文件地址，若为空则显示占位提示。
-  onProgress?: (time: number) => void; // 播放进度回调，驱动 Piano-Roll 光标。
-  onDuration?: (duration: number) => void; // 当解析出时长后通知上层。
-  externalSeek?: number | null; // 来自 Piano-Roll 的定位请求。
-  onError?: (message: string) => void; // 解析失败时上报错误。
-  onSeekApplied?: () => void; // Player 完成外部 seek 后通知上层清理状态。
+  midiUrl: string | null;
+  onProgress?: (time: number) => void;
+  onDuration?: (duration: number) => void;
+  externalSeek?: number | null;
+  onError?: (message: string) => void;
+  onSeekApplied?: () => void;
+  loopRegion?: { start: number; end: number } | null;
+  onLoopRegionChange?: (range: { start: number; end: number } | null) => void;
 }
 
 interface ScheduledNote {
-  time: number; // 音符触发时间（秒）。
-  name: string; // 音高名称，例如 C4。
-  duration: number; // 持续时长（秒）。
-  velocity: number; // 力度（0-1）。
+  time: number;
+  name: string;
+  duration: number;
+  velocity: number;
 }
 
-const Player: React.FC<PlayerProps> = ({ midiUrl, onProgress, onDuration, externalSeek, onError, onSeekApplied }) => {
+const Player: React.FC<PlayerProps> = ({
+  midiUrl,
+  onProgress,
+  onDuration,
+  externalSeek,
+  onError,
+  onSeekApplied,
+  loopRegion,
+  onLoopRegionChange,
+}) => {
   const { t } = useI18n();
   const [isLoading, setIsLoading] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [duration, setDuration] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
-  const [loop, setLoop] = useState(false);
+  const [loopEnabled, setLoopEnabled] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [internalLoop, setInternalLoop] = useState<{ start: number; end: number } | null>(null);
   const partRef = useRef<Tone.Part | null>(null);
   const synthRef = useRef<Tone.PolySynth | null>(null);
   const rafRef = useRef<number>();
   const abortRef = useRef<AbortController | null>(null);
+
+  const effectiveLoop = loopRegion ?? internalLoop;
+
+  const updateLoopRegion = useCallback(
+    (next: { start: number; end: number } | null) => {
+      if (onLoopRegionChange) {
+        onLoopRegionChange(next);
+      }
+      if (loopRegion == null) {
+        setInternalLoop(next);
+      }
+    },
+    [loopRegion, onLoopRegionChange]
+  );
 
   const disposePlayback = () => {
     partRef.current?.dispose();
@@ -48,6 +74,7 @@ const Player: React.FC<PlayerProps> = ({ midiUrl, onProgress, onDuration, extern
       disposePlayback();
       setDuration(0);
       setError(null);
+      setInternalLoop(null);
       return;
     }
 
@@ -94,6 +121,7 @@ const Player: React.FC<PlayerProps> = ({ midiUrl, onProgress, onDuration, extern
         setDuration(midiDuration);
         onDuration?.(midiDuration);
         setCurrentTime(0);
+        updateLoopRegion(null);
       } catch (err) {
         if ((err as Error).name === "AbortError") {
           return;
@@ -114,11 +142,6 @@ const Player: React.FC<PlayerProps> = ({ midiUrl, onProgress, onDuration, extern
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [midiUrl]);
-
-  useEffect(() => {
-    Tone.Transport.loop = loop;
-    Tone.Transport.loopEnd = duration;
-  }, [duration, loop]);
 
   useEffect(() => {
     if (!isPlaying) {
@@ -150,14 +173,29 @@ const Player: React.FC<PlayerProps> = ({ midiUrl, onProgress, onDuration, extern
     if (!partRef.current) return;
     const target = Math.max(0, Math.min(duration, externalSeek));
     Tone.Transport.pause();
-    Tone.Transport.seconds = target; // Tone.Transport 的 seconds 表示从播放开始的绝对秒数。
+    Tone.Transport.seconds = target;
     setCurrentTime(target);
     onProgress?.(target);
     if (isPlaying) {
-      Tone.Transport.start("+0", target); // 第二个参数为 offset，实现快速定位。
+      Tone.Transport.start("+0", target);
     }
     onSeekApplied?.();
   }, [externalSeek, duration, isPlaying, onProgress, onSeekApplied]);
+
+  useEffect(() => {
+    if (!loopEnabled) {
+      Tone.Transport.loop = false;
+      Tone.Transport.loopStart = 0;
+      Tone.Transport.loopEnd = duration;
+      return;
+    }
+    const bounds = effectiveLoop ?? { start: 0, end: duration };
+    const start = Math.max(0, Math.min(duration, bounds.start));
+    const end = Math.max(start + 0.1, Math.min(duration, bounds.end));
+    Tone.Transport.loop = true;
+    Tone.Transport.loopStart = start;
+    Tone.Transport.loopEnd = end;
+  }, [loopEnabled, effectiveLoop, duration]);
 
   const handlePlay = useCallback(
     async (startTime?: number) => {
@@ -180,11 +218,11 @@ const Player: React.FC<PlayerProps> = ({ midiUrl, onProgress, onDuration, extern
   const handleSeek = (value: number) => {
     const target = Math.max(0, Math.min(duration, value));
     Tone.Transport.pause();
-    Tone.Transport.seconds = target; // Tone.Transport.seconds 与 UI 的秒数一致，可直接写入。
+    Tone.Transport.seconds = target;
     setCurrentTime(target);
     onProgress?.(target);
     if (isPlaying) {
-      Tone.Transport.start("+0", target); // 第二个参数 offset 指定从哪一秒开始继续播放。
+      Tone.Transport.start("+0", target);
     }
   };
 
@@ -198,32 +236,49 @@ const Player: React.FC<PlayerProps> = ({ midiUrl, onProgress, onDuration, extern
 
   const progress = useMemo(() => (duration > 0 ? Math.min(currentTime / duration, 1) : 0), [currentTime, duration]);
 
+  const handleSetLoopStart = () => {
+    const end = effectiveLoop?.end ?? duration;
+    const start = Math.max(0, Math.min(currentTime, end - 0.1));
+    updateLoopRegion({ start, end });
+  };
+
+  const handleSetLoopEnd = () => {
+    const start = effectiveLoop?.start ?? 0;
+    const end = Math.max(start + 0.1, Math.min(duration, currentTime));
+    updateLoopRegion({ start, end });
+  };
+
+  const handleClearLoop = () => {
+    updateLoopRegion(null);
+    setLoopEnabled(false);
+  };
+
   return (
-    <section className="space-y-3 rounded-lg border border-slate-200 bg-white p-4 shadow-sm text-sm text-slate-900 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-100">
+    <section className="metal-panel rounded-xl p-6 text-sm text-gray-200">
       <header className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="text-sm font-semibold">{t("player.title")}</h3>
-        <span className="text-xs text-slate-500 dark:text-slate-400">{t("player.subtitle")}</span>
+        <h3 className="text-lg font-semibold text-white">{t("player.title")}</h3>
+        <span className="text-xs text-gray-300">{t("player.subtitle")}</span>
       </header>
       {!midiUrl ? (
-        <div className="rounded border border-dashed border-slate-300 p-4 text-center text-xs text-slate-500 dark:border-slate-700 dark:text-slate-400">
+        <div className="mt-4 rounded border border-dashed border-gray-700/60 p-6 text-center text-xs text-gray-400">
           {t("player.noMidi")}
         </div>
       ) : (
-        <div className="space-y-3">
-          <div className="flex items-center gap-3">
+        <div className="mt-4 space-y-4">
+          <div className="flex flex-wrap items-center gap-3">
             {isPlaying ? (
-              <sl-button size="small" variant="default" onClick={handlePause} disabled={isLoading}>
+              <button type="button" className="metal-button rounded-md px-4 py-2 text-xs" onClick={handlePause} disabled={isLoading}>
                 {t("player.pause")}
-              </sl-button>
+              </button>
             ) : (
-              <sl-button
-                size="small"
-                variant="primary"
+              <button
+                type="button"
+                className="metal-button rounded-md px-4 py-2 text-xs"
                 disabled={isLoading}
                 onClick={() => handlePlay(0)}
               >
                 {t("player.play")}
-              </sl-button>
+              </button>
             )}
             <div className="flex-1">
               <input
@@ -232,11 +287,11 @@ const Player: React.FC<PlayerProps> = ({ midiUrl, onProgress, onDuration, extern
                 max={duration || 0}
                 step={0.01}
                 value={duration ? currentTime : 0}
-                className="h-2 w-full cursor-pointer rounded-full bg-slate-200 dark:bg-slate-700"
+                className="h-2 w-full cursor-pointer rounded-full bg-gray-700"
                 aria-label={t("player.seekLabel")}
                 onChange={(event) => handleSeek(Number(event.target.value))}
               />
-              <div className="mt-1 flex justify-between text-[11px] text-slate-500 dark:text-slate-400">
+              <div className="mt-1 flex justify-between text-[11px] text-gray-300">
                 <span>
                   {t("player.elapsed")}: {formatSeconds(currentTime)}
                 </span>
@@ -245,23 +300,40 @@ const Player: React.FC<PlayerProps> = ({ midiUrl, onProgress, onDuration, extern
                 </span>
               </div>
             </div>
-            <label className="flex items-center gap-1 text-xs text-slate-600 dark:text-slate-300">
+            <label className="flex items-center gap-2 text-xs text-gray-200">
               <input
                 type="checkbox"
-                checked={loop}
-                onChange={(event) => setLoop(event.target.checked)}
+                className="accent-bloodred"
+                checked={loopEnabled}
+                onChange={(event) => setLoopEnabled(event.target.checked)}
+                disabled={!effectiveLoop}
               />
-              {loop ? t("player.loopActive") : t("player.loop")}
+              {loopEnabled ? "Loop on" : "Loop off"}
             </label>
           </div>
-          {isLoading && <p className="text-xs text-slate-500 dark:text-slate-400">{t("player.loading")}</p>}
+
+          <div className="flex flex-wrap items-center gap-2 text-[11px] text-gray-300">
+            <span>
+              Loop start: {formatSeconds(effectiveLoop?.start ?? 0)} · Loop end: {formatSeconds(effectiveLoop?.end ?? duration)}
+            </span>
+            <button type="button" className="metal-button rounded px-3 py-1 text-[11px]" onClick={handleSetLoopStart} disabled={!midiUrl}>
+              Set A from cursor
+            </button>
+            <button type="button" className="metal-button rounded px-3 py-1 text-[11px]" onClick={handleSetLoopEnd} disabled={!midiUrl}>
+              Set B from cursor
+            </button>
+            <button type="button" className="metal-button rounded px-3 py-1 text-[11px]" onClick={handleClearLoop} disabled={!effectiveLoop}>
+              Clear loop
+            </button>
+          </div>
+
+          {isLoading && <p className="text-xs text-gray-300">{t("player.loading")}</p>}
           {error && (
-            <sl-alert variant="danger" open>
-              <span slot="icon">⚠️</span>
-              {error}
-            </sl-alert>
+            <div className="rounded border border-bloodred/40 bg-black/50 p-3 text-xs text-gray-100">
+              <span className="font-semibold text-white">{error}</span>
+            </div>
           )}
-          <p className="text-[11px] text-slate-500 dark:text-slate-400">{t("player.muteHint")}</p>
+          <p className="text-[11px] text-gray-300">{t("player.muteHint")}</p>
         </div>
       )}
     </section>

@@ -1,11 +1,6 @@
 import React from "react";
 import clsx from "clsx";
 
-/**
- * StepIndicator 组件：顶栏步骤导航，突出当前阶段并告知整体进度。
- * - 使用红色光条凸显激活步骤；
- * - 结合金属质感的字体与分隔线，营造工业风格。
- */
 export interface StepDefinition {
   id: number;
   label: string;
@@ -15,31 +10,103 @@ export interface StepDefinition {
 interface StepIndicatorProps {
   steps: StepDefinition[];
   currentStep: number;
+  highestUnlocked: number;
+  onStepChange: (stepId: number) => void;
+  onBack: () => void;
+  onNext: () => void;
+  canGoBack: boolean;
+  canGoNext: boolean;
+  nextLabel?: string;
+  nextDisabledReason?: string | null;
 }
 
-const StepIndicator: React.FC<StepIndicatorProps> = ({ steps, currentStep }) => {
+const StepIndicator: React.FC<StepIndicatorProps> = ({
+  steps,
+  currentStep,
+  highestUnlocked,
+  onStepChange,
+  onBack,
+  onNext,
+  canGoBack,
+  canGoNext,
+  nextLabel = "Next",
+  nextDisabledReason,
+}) => {
   return (
-    <nav className="flex items-center gap-8 text-xs uppercase tracking-[0.3em] text-gray-400">
-      {steps.map((step, index) => {
-        const isActive = step.id === currentStep;
-        const isCompleted = step.id < currentStep;
-        return (
-          <div
-            key={step.id}
-            className={clsx(
-              "flex flex-col items-center text-center transition-colors duration-200",
-              isActive ? "text-white glow-line" : isCompleted ? "text-gray-200" : "text-gray-500"
-            )}
+    <div className="flex w-full flex-col gap-4">
+      <nav aria-label="Workflow progress" className="flex flex-col gap-2">
+        <ol className="flex flex-wrap items-center gap-4 text-xs uppercase tracking-[0.3em] text-gray-300">
+          {steps.map((step, index) => {
+            const isActive = step.id === currentStep;
+            const isCompleted = step.id < currentStep;
+            const isLocked = step.id > highestUnlocked;
+            const isClickable = !isLocked && step.id !== currentStep;
+            return (
+              <li key={step.id} className="flex items-center gap-4">
+                <button
+                  type="button"
+                  className={clsx(
+                    "group flex min-w-[120px] flex-col items-start rounded-md border px-3 py-2 text-left text-[11px] tracking-[0.2em] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bloodred/80 focus-visible:ring-offset-2 focus-visible:ring-offset-black",
+                    isActive
+                      ? "border-bloodred/70 bg-bloodred/20 text-white shadow-[0_0_0_1px_rgba(229,9,20,0.35)]"
+                      : isCompleted
+                      ? "border-bloodred/30 bg-black/40 text-gray-100 hover:border-bloodred/60"
+                      : isLocked
+                      ? "border-gray-700/60 bg-black/20 text-gray-500"
+                      : "border-gray-600/60 bg-black/30 text-gray-200 hover:border-bloodred/60"
+                  )}
+                  onClick={() => isClickable && onStepChange(step.id)}
+                  disabled={!isClickable}
+                  aria-current={isActive ? "step" : undefined}
+                  aria-disabled={isLocked}
+                >
+                  <span className="text-[10px] font-semibold text-bloodred/80">STEP {step.id}</span>
+                  <span className="mt-1 text-sm font-semibold tracking-[0.1em] text-white">{step.label}</span>
+                  {step.description && (
+                    <span className="mt-1 text-[10px] normal-case tracking-normal text-gray-400">{step.description}</span>
+                  )}
+                </button>
+                {index < steps.length - 1 && (
+                  <div className="h-px w-12 bg-gradient-to-r from-transparent via-bloodred/40 to-transparent" aria-hidden="true" />
+                )}
+              </li>
+            );
+          })}
+        </ol>
+      </nav>
+
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="flex items-center gap-2 text-xs uppercase tracking-[0.2em] text-gray-300">
+          <span className="text-bloodred">{`0${currentStep}`.slice(-2)}</span>
+          <span className="text-gray-500">/</span>
+          <span>{`0${steps.length}`.slice(-2)}</span>
+        </div>
+        <div className="h-px flex-1 bg-gradient-to-r from-bloodred/40 via-red-500/30 to-transparent" aria-hidden="true" />
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            className="metal-button rounded-md px-4 py-2 text-xs"
+            onClick={onBack}
+            disabled={!canGoBack}
           >
-            <div className="text-[0.65rem]">{`${step.id.toString().padStart(2, "0")}/${steps.length}`}</div>
-            <div className="mt-1 font-semibold">{step.label}</div>
-            {index < steps.length - 1 && (
-              <div className="mt-3 h-px w-16 bg-gradient-to-r from-transparent via-bloodred/40 to-transparent" />
-            )}
-          </div>
-        );
-      })}
-    </nav>
+            Back
+          </button>
+          <button
+            type="button"
+            className="metal-button rounded-md px-4 py-2 text-xs"
+            onClick={onNext}
+            disabled={!canGoNext}
+          >
+            {nextLabel}
+          </button>
+        </div>
+      </div>
+      {!canGoNext && nextDisabledReason && (
+        <p className="text-[11px] text-gray-300">
+          {nextDisabledReason}
+        </p>
+      )}
+    </div>
   );
 };
 
