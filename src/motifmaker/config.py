@@ -57,8 +57,10 @@ class Settings:
     hf_model: str = field(default="facebook/musicgen-small")
     replicate_api_token: str = field(default="")
     replicate_model: str = field(default="meta/musicgen:latest")
+    environment: str = field(default="production")
     render_timeout_sec: int = field(default=120)
     render_max_seconds: int = field(default=30)
+    render_max_concurrency: int = field(default=2)
     daily_free_quota: int = field(default=10)
     pro_user_emails: List[str] = field(default_factory=list)
     usage_db_path: str = field(default="var/usage.db")
@@ -85,8 +87,10 @@ class Settings:
             hf_model=os.getenv("HF_MODEL", "facebook/musicgen-small"),
             replicate_api_token=os.getenv("REPLICATE_API_TOKEN", ""),
             replicate_model=os.getenv("REPLICATE_MODEL", "meta/musicgen:latest"),
+            environment=os.getenv("ENV", "production"),
             render_timeout_sec=int(os.getenv("RENDER_TIMEOUT_SEC", "120")),
             render_max_seconds=int(os.getenv("RENDER_MAX_SECONDS", "30")),
+            render_max_concurrency=int(os.getenv("RENDER_MAX_CONCURRENCY", "2")),
             daily_free_quota=int(os.getenv("DAILY_FREE_QUOTA", "10")),
             pro_user_emails=_split_list(os.getenv("PRO_USER_EMAILS", "")),
             usage_db_path=os.getenv("USAGE_DB_PATH", "var/usage.db"),
@@ -109,9 +113,13 @@ REPLICATE_API_TOKEN: str = settings.replicate_api_token
 REPLICATE_MODEL: str = settings.replicate_model
 RENDER_TIMEOUT_SEC: int = max(1, settings.render_timeout_sec)
 RENDER_MAX_SECONDS: int = max(1, settings.render_max_seconds)
+RENDER_MAX_CONCURRENCY: int = max(1, settings.render_max_concurrency)
 DAILY_FREE_QUOTA: int = settings.daily_free_quota
 PRO_USER_EMAILS: Set[str] = {email.lower() for email in settings.pro_user_emails}
 USAGE_DB_PATH: str = settings.usage_db_path
+
+# 中文注释：环境标识用于控制调试行为（例如同步渲染仅在开发环境启用）。
+APP_ENV: str = settings.environment.lower()
 
 # 中文注释：为了避免配额数据库意外提交，确保运行目录在仓库忽略列表内。
 Path(USAGE_DB_PATH).parent.mkdir(parents=True, exist_ok=True)

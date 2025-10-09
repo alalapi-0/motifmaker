@@ -36,6 +36,7 @@ def _build_client(
         "PROJECTS_DIR": str(projects_dir),
         "USAGE_DB_PATH": str(tmp_path / "usage.db"),
         "RATE_LIMIT_RPS": "100",
+        "ENV": "dev",
     }
     for key, value in {**base_env, **extra_env}.items():
         monkeypatch.setenv(key, str(value))
@@ -45,6 +46,17 @@ def _build_client(
 
     api = importlib.import_module("motifmaker.api")
     importlib.reload(api)
+
+    from motifmaker.task_manager import TaskManager
+    import motifmaker
+    import motifmaker.audio_render as audio_render_module
+    from motifmaker.quota import init_usage_db
+
+    manager = TaskManager(max_concurrency=4)
+    motifmaker.task_manager = manager
+    audio_render_module.task_manager = manager
+    init_usage_db(str(tmp_path / "usage.db"))
+
     return TestClient(api.app), output_dir
 
 
@@ -62,8 +74,8 @@ def test_placeholder_provider_success(monkeypatch: pytest.MonkeyPatch, tmp_path:
     _write_dummy_midi(midi_path)
 
     response = client.post(
-        "/render/",
-        data={"midi_path": str(midi_path), "style": "cinematic", "intensity": "0.6"},
+        "/render/?sync=1",
+        data={"midi_path": str(midi_path), "style": "cinematic", "intensity": "0.6", "sync": "1"},
     )
     payload = response.json()
     assert response.status_code == 200
@@ -134,8 +146,8 @@ def test_daily_quota_limit(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
     _write_dummy_midi(midi_path)
 
     first = client.post(
-        "/render/",
-        data={"midi_path": str(midi_path), "style": "cinematic", "intensity": "0.5"},
+        "/render/?sync=1",
+        data={"midi_path": str(midi_path), "style": "cinematic", "intensity": "0.5", "sync": "1"},
     )
     assert first.status_code == 200
 

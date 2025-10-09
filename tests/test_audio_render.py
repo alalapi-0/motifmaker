@@ -17,6 +17,8 @@ def render_client(tmp_path, monkeypatch) -> Tuple[TestClient, Path]:
 
     outputs_dir = tmp_path / "outputs"
     monkeypatch.setenv("OUTPUT_DIR", str(outputs_dir))
+    monkeypatch.setenv("USAGE_DB_PATH", str(tmp_path / "usage.db"))
+    monkeypatch.setenv("ENV", "dev")
 
     # 中文注释：重新加载配置与路由模块，确保使用新的输出目录。
     config_module = importlib.import_module("motifmaker.config")
@@ -24,8 +26,21 @@ def render_client(tmp_path, monkeypatch) -> Tuple[TestClient, Path]:
     audio_render_module = importlib.import_module("motifmaker.audio_render")
     importlib.reload(audio_render_module)
 
+    # 中文注释：重建任务管理器，避免与其它测试互相影响。
+    from motifmaker.task_manager import TaskManager
+    import motifmaker
+
+    manager = TaskManager(max_concurrency=4)
+    motifmaker.task_manager = manager
+    audio_render_module.task_manager = manager
+
+    from motifmaker.quota import init_usage_db
+
+    init_usage_db(str(tmp_path / "usage.db"))
+
     app = FastAPI()
     app.include_router(audio_render_module.router)
+    app.include_router(audio_render_module.tasks_router)
 
     return TestClient(app), Path(config_module.OUTPUT_DIR)
 
@@ -38,7 +53,10 @@ def test_render_with_existing_midi_path(render_client):
     midi_path = output_dir / "demo.mid"
     midi_path.write_bytes(b"MThd")
 
-    response = client.post("/render/", data={"midi_path": f"/outputs/{midi_path.name}"})
+    response = client.post(
+        "/render/?sync=1",
+        data={"midi_path": f"/outputs/{midi_path.name}", "sync": "1"},
+    )
     assert response.status_code == 200
     payload = response.json()
     assert payload["ok"] is True
@@ -56,9 +74,9 @@ def test_render_with_uploaded_file(render_client):
 
     files = {"midi_file": ("upload.mid", b"MThd", "audio/midi")}
     response = client.post(
-        "/render/",
+        "/render/?sync=1",
         files=files,
-        data={"style": "cinematic", "intensity": "0.7"},
+        data={"style": "cinematic", "intensity": "0.7", "sync": "1"},
     )
     assert response.status_code == 200
     payload = response.json()

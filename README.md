@@ -107,6 +107,16 @@ Prompt → 解析层(parsing) → 骨架JSON(schema) → 动机生成(motif)
   - API Token 仅存放在 `.env`，务必加入 `.gitignore`，禁止提交到仓库；
   - 生产部署建议将生成的音频上传到对象存储/CDN，由静态链接供前端访问。
 
+## ⚙️ Async Rendering & Task API
+- `POST /render/` → `202 Accepted`，返回 `{"task_id": "..."}`；任务将在后台异步执行。
+- `GET /tasks/{id}` → 查询任务状态、进度以及 `result`/`error` 字段，供前端轮询。
+- `DELETE /tasks/{id}` → 取消运行中的任务（尽力而为），返回最新状态快照。
+- 默认运行模式为异步；在 `.env` 中将 `ENV=dev` 后，可通过 `?sync=1` 或请求体携带 `{"sync": true}` 触发同步调试，仅建议在开发环境使用。
+- 渲染调用改为非阻塞实现，所有外部请求均使用 `httpx.AsyncClient` 与指数退避重试，事件循环可快速响应创建请求。
+- `RENDER_MAX_CONCURRENCY` 控制并发上限，防止瞬时压垮第三方 Provider，后续可平滑替换为 Redis/消息队列。
+
+> 兼容性提示：旧版前端若仍依赖同步返回音频 URL，可暂时在开发环境附加 `?sync=1` 参数。生产环境请尽快迁移至轮询任务模式。
+
 ## Path Safety & Download Rules
 - All file paths are validated by `resolve()` + `relative_to()` against whitelisted roots.
 - Allowed roots: `OUTPUT_DIR`, `PROJECTS_DIR`.

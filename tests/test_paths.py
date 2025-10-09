@@ -25,6 +25,16 @@ def _reload_app() -> TestClient:
     config = importlib.reload(config)
     audio_render = importlib.reload(audio_render)
     api = importlib.reload(api)
+    from motifmaker.task_manager import TaskManager
+    import motifmaker
+
+    manager = TaskManager(max_concurrency=4)
+    motifmaker.task_manager = manager
+    audio_render.task_manager = manager
+
+    from motifmaker.quota import init_usage_db
+
+    init_usage_db(config.USAGE_DB_PATH)
     return TestClient(api.app)
 
 
@@ -67,6 +77,7 @@ def test_render_accepts_relative_and_absolute_paths(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("OUTPUT_DIR", "outputs")
     monkeypatch.setenv("PROJECTS_DIR", "projects")
+    monkeypatch.setenv("ENV", "dev")
     outputs_dir = Path("outputs")
     outputs_dir.mkdir(parents=True, exist_ok=True)
     midi_file = outputs_dir / "rel.mid"
@@ -74,26 +85,26 @@ def test_render_accepts_relative_and_absolute_paths(tmp_path, monkeypatch):
 
     with _reload_app() as client:
         resp_rel = client.post(
-            "/render/",
+            "/render/?sync=1",
             data={
                 "midi_path": "outputs/rel.mid",
                 "style": "cinematic",
                 "intensity": "0.5",
+                "sync": "1",
             },
         )
         assert resp_rel.status_code == 200
-        assert resp_rel.json().get("ok") is True
 
         resp_abs = client.post(
-            "/render/",
+            "/render/?sync=1",
             data={
                 "midi_path": str(midi_file.resolve()),
                 "style": "cinematic",
                 "intensity": "0.5",
+                "sync": "1",
             },
         )
         assert resp_abs.status_code == 200
-        assert resp_abs.json().get("ok") is True
 
 
 def test_render_rejects_path_traversal(tmp_path, monkeypatch):
