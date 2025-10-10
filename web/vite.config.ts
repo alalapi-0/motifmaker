@@ -21,4 +21,14 @@ export default defineConfig({
     host: "0.0.0.0", // 监听 0.0.0.0，方便容器或局域网内其他设备访问。
     port: 5173, // 固定端口号为 5173，与 README 中的访问指引一致。
   },
+  test: {
+    // 中文注释：配置 Vitest 运行在 jsdom 环境，模拟浏览器 API。
+    environment: "jsdom",
+    // 中文注释：启用 Vitest 全局断言，减少测试文件样板代码。
+    globals: true,
+    // 中文注释：测试执行前加载全局初始化，注册 jest-dom 匹配器。
+    setupFiles: "./vitest.setup.ts",
+    // 中文注释：开启 V8 覆盖率报告，便于 CI 统计。
+    coverage: { provider: "v8", reporter: ["text", "html"] },
+  },
 });

@@ -16,7 +16,9 @@
     "build:electron": "tsc -p tsconfig.json",
     "start:electron": "node dist/main.js",
     "pack": "electron-builder --dir",
-    "dist": "electron-builder"
+    "dist": "electron-builder",
+    "// typecheck": "中文说明：CI 仅执行静态类型检查，避免打包 Electron。",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {},
   "devDependencies": {

@@ -277,6 +277,17 @@ curl http://localhost:8000/config-public
 - **健康检查**：部署完成后务必执行 `bash deploy/scripts/check_health.sh` 与 `bash deploy/scripts/smoke_test.sh`，确保链路通畅。
 - **更多细节**：包含 Docker/Compose、日志、安全实践在内的完整指南请阅读 [`deploy/README_DEPLOY.md`](deploy/README_DEPLOY.md)。
 
+## Continuous Integration
+This repository ships with a GitHub Actions workflow (`.github/workflows/ci.yml`) that runs:
+- Python linting (ruff) and unit tests (pytest)
+- Web ESLint and unit tests (Vitest + React Testing Library)
+- Optional typecheck for the Electron project
+
+Run locally:
+- Python: `ruff .` and `pytest -q`
+- Web: `cd web && npm run lint && npm run test`
+- Electron (optional): `cd desktop && tsc -p tsconfig.json --noEmit`
+
 ## 10. 许可与致谢
 - 许可证：MIT（详见 [LICENSE](LICENSE)）。
 - 致谢：项目使用了 FastAPI、Typer、music21、pretty_midi、Tone.js、React、TailwindCSS、Shoelace 等开源库。

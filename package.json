@@ -1,0 +1,14 @@
+{
+  "name": "motifmaker-root-scripts",
+  "private": true,
+  "version": "0.0.0",
+  "_comment": "中文注释：集中维护 CI/开发脚本，方便在根目录通过 npm run 调用各子项目检查。",
+  "scripts": {
+    "lint:py": "ruff check .",
+    "test:py": "pytest -q",
+    "lint:web": "cd web && npm ci && npm run lint",
+    "test:web": "cd web && npm ci && npm run test",
+    "typecheck:desktop": "cd desktop && if [ -f tsconfig.json ]; then npm ci && (npm run typecheck || npx tsc -p tsconfig.json --noEmit); else echo \"skip desktop typecheck\"; fi",
+    "ci:all": "npm run lint:py && npm run test:py && npm run lint:web && npm run test:web && npm run typecheck:desktop"
+  }
+}
