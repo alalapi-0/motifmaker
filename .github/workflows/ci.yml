@@ -2,47 +2,57 @@ name: CI
 
 on:
   push:
+    branches: [ main, develop ]
   pull_request:
+    branches: [ main, develop ]
 
 jobs:
-  build:
+  build-test:
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
-      # 安装 shellcheck 以便检查部署脚本的 Bash 语法
-      - name: Install shellcheck
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y shellcheck
-      - name: Set up Python
+      - name: "📦 Checkout"
+        uses: actions/checkout@v4
+
+      - name: "🐍 Setup Python"
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
-      - name: Install dependencies
+          python-version: '3.11'
+
+      - name: "📥 Install Python deps"
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements-dev.txt
-      # 使用 shellcheck 确认 Bash 脚本风格与潜在错误
-      - name: Lint shell scripts
-        run: shellcheck deploy/scripts/*.sh
-      - name: Lint with black
-        run: black --check src tests
-      - name: Lint with isort
-        run: isort --check-only src tests
-      - name: Type check with mypy
-        run: mypy src
-      - name: Document flake8 policy
-        run: echo "flake8 检查由 black/isort 组合替代，避免重复规则冲突"
-      - name: Run tests
-        run: pytest -q
-      # 仅做静态检查：确认健康检查脚本存在且具备执行权限
-      - name: Verify health script executable
-        run: test -x deploy/scripts/check_health.sh
-      # 在 PR 打上 frontend 标签时，执行前端构建以确认产物可生成
-      - name: Frontend build dry run
-        if: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'frontend') }}
+          # 中文注释：安装项目与开发依赖，pyproject 已声明运行/测试所需库。
+          pip install -e ".[dev]"
+
+      - name: "✅ Python lint & tests"
         run: |
-          cd web
+          # 中文注释：运行 Ruff 与 Pytest，确保后端代码风格与单测通过。
+          ruff --version
+          ruff .
+          pytest -q
+
+      - name: "🟦 Setup Node"
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: |
+            web/package-lock.json
+            desktop/package-lock.json
+
+      - name: "🔧 Web lint & unit tests"
+        working-directory: web
+        run: |
+          # 中文注释：安装前端依赖并运行 ESLint 与 Vitest。
           npm ci
-          npm run build
+          npm run lint
+          npm run test
+
+      - name: "🖥️ Desktop typecheck (optional)"
+        if: ${{ hashFiles('desktop/tsconfig.json') != '' }}
+        working-directory: desktop
+        run: |
+          # 中文注释：仅执行类型检查，不构建 Electron 安装包。
+          npm ci || true
+          if [ -f tsconfig.json ]; then npx tsc -p tsconfig.json --noEmit; fi

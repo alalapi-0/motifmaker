@@ -23,7 +23,14 @@ from .audio_render import (
     tasks_router as render_tasks_router,
 )
 from .auth import extract_token
-from .config import AUDIO_PROVIDER, OUTPUT_DIR, QUOTA_BACKEND, USAGE_DB_PATH, settings
+from .config import (
+    AUDIO_PROVIDER,
+    DAILY_FREE_QUOTA,  # 中文注释：引入每日免费额度常量，供公开配置接口直接读取。
+    OUTPUT_DIR,
+    QUOTA_BACKEND,
+    USAGE_DB_PATH,
+    settings,
+)
 from .errors import (
     MMError,
     PersistenceError,
