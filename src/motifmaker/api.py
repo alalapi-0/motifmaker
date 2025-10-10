@@ -11,20 +11,19 @@ from typing import Literal, Optional
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, Request
-from fastapi.exceptions import RequestValidationError
+from fastapi.exceptions import HTTPException as FastAPIHTTPException, RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from .audio_render import router as audio_render_router, tasks_router as render_tasks_router
-from .config import (
-    AUDIO_PROVIDER,
-    DAILY_FREE_QUOTA,
-    OUTPUT_DIR,
-    USAGE_DB_PATH,
-    settings,
+from .audio_render import (
+    router as audio_render_router,
+    set_quota_storage,
+    tasks_router as render_tasks_router,
 )
+from .auth import extract_token
+from .config import AUDIO_PROVIDER, OUTPUT_DIR, QUOTA_BACKEND, USAGE_DB_PATH, settings
 from .errors import (
     MMError,
     PersistenceError,
@@ -36,7 +35,7 @@ from .errors import (
 from .logging_setup import get_logger, setup_logging
 from .parsing import parse_natural_prompt
 from .persistence import load_project_json, save_project_json
-from .quota import init_usage_db
+from .quota import BaseQuotaStorage, create_quota_storage
 from .ratelimit import rate_limiter
 from .render import RenderResult, render_project
 from .schema import ProjectSpec, default_from_prompt_meta
@@ -58,8 +57,10 @@ app.add_middleware(
 
 # 中文注释：挂载静态目录前确保输出路径存在，避免启动时因目录缺失而失败。
 ensure_directory(OUTPUT_DIR)
-# 中文注释：初始化每日配额数据库，当前实现使用本地 SQLite，生产建议替换为集中式存储。
-init_usage_db(USAGE_DB_PATH)
+# 中文注释：创建配额存储单例，后续路由从中读取每日免费额度计数。
+quota: BaseQuotaStorage = create_quota_storage(QUOTA_BACKEND, USAGE_DB_PATH)
+set_quota_storage(quota)
+app.state.quota_storage = quota
 # 中文注释：开发阶段直接挂载 outputs 目录用于提供 MIDI/WAV 下载；生产环境建议使用 Nginx/Caddy 等专业静态服务。
 app.mount("/outputs", StaticFiles(directory=OUTPUT_DIR), name="outputs")
 
@@ -81,13 +82,16 @@ async def request_logging_middleware(request: Request, call_next):
         duration_ms = (time.perf_counter() - start) * 1000
         client_ip = request.client.host if request.client else "anonymous"
         status_code = response.status_code if response else 500
+        token = extract_token(request)
+        token_hint = f"{token[:4]}***" if token else "-"
         logger.info(
-            "request method=%s path=%s status=%s duration_ms=%.2f ip=%s",
+            "request method=%s path=%s status=%s duration_ms=%.2f ip=%s token=%s",
             request.method,
             request.url.path,
             status_code,
             duration_ms,
             client_ip,
+            token_hint,
         )
 
 
@@ -129,6 +133,24 @@ async def handle_unexpected_error(request: Request, exc: Exception):
     )
     err = InternalServerError()
     return JSONResponse(status_code=err.http_status, content=error_response(err))
+
+
+@app.exception_handler(FastAPIHTTPException)
+async def handle_fastapi_http_exception(request: Request, exc: FastAPIHTTPException):
+    """兼容 FastAPI 抛出的 HTTPException，并按需转换错误结构。"""
+
+    payload = exc.detail
+    if isinstance(payload, dict) and payload.get("code") == "E_AUTH":
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"ok": False, "error": payload},
+            headers=exc.headers,
+        )
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": payload},
+        headers=exc.headers,
+    )
 
 
 class GenerationOptions(BaseModel):

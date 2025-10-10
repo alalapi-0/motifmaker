@@ -29,10 +29,6 @@ def _reset_task_manager(monkeypatch):
     manager = TaskManager(max_concurrency=5)
     monkeypatch.setattr(motifmaker, "task_manager", manager, raising=False)
     monkeypatch.setattr(audio_render, "task_manager", manager, raising=False)
-    from motifmaker.config import PRO_USER_EMAILS
-
-    PRO_USER_EMAILS.add("test@async.dev")
-    audio_render.PRO_USER_EMAILS = PRO_USER_EMAILS
     monkeypatch.setattr(audio_render, "DAILY_FREE_QUOTA", 1000, raising=False)
     return manager
 
@@ -44,7 +40,6 @@ async def async_client():
     async with httpx.AsyncClient(
         app=app,
         base_url="http://testserver",
-        headers={"X-User-Email": "test@async.dev"},
     ) as client:
         yield client
 

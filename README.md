@@ -91,21 +91,44 @@ Prompt → 解析层(parsing) → 骨架JSON(schema) → 动机生成(motif)
   HF_MODEL=facebook/musicgen-small        # 可替换为私有端点
   RENDER_TIMEOUT_SEC=120                  # 推理超时（秒）
   RENDER_MAX_SECONDS=30                   # 限制生成音频最长时长
-  DAILY_FREE_QUOTA=10                     # 每日免费额度
-  PRO_USER_EMAILS=vip@example.com,team@studio.com
+  AUTH_REQUIRED=true                      # 生产环境必须开启鉴权
+  API_KEYS=tok_dev, tok_team              # 允许访问的 Token 列表
+  PRO_USER_TOKENS=tok_team                # Pro 用户 Token 白名单
+  DAILY_FREE_QUOTA=10                     # 每 Token 每日免费次数
+  QUOTA_BACKEND=sqlite                    # 配额存储后端
   ```
 
 - **成本与配额策略**：
-  - 免费用户：按 IP/Email 统计，每日 `DAILY_FREE_QUOTA` 次免费渲染；
-  - Pro 用户：将邮箱加入 `PRO_USER_EMAILS` 白名单，可跳过免费额度限制；
-  - 计数存储在本地 `var/usage.db`（SQLite），生产部署请替换为集中式存储以便扩容。
+  - 免费用户：按 Token 统计每日调用次数，默认 `DAILY_FREE_QUOTA=10`；
+  - Pro 用户：将 Token 加入 `PRO_USER_TOKENS` 白名单，可跳过每日免费额度；
+  - 配额存储由 `QUOTA_BACKEND` 决定，默认 `sqlite`（`var/usage.db`），开发可改为 `memory`，未来将支持集中式 Redis。
 - **风险提示**：
   - 外部模型可能返回 429/5xx，后端已内置指数退避与 504 超时保护；
   - 不同 Provider 输出格式可能为 WAV/MP3，请在消费端处理多种音频类型；
   - 超时或模型加载（202 Accepted）会触发重试，必要时可增加 timeout。
 - **安全提示**：
   - API Token 仅存放在 `.env`，务必加入 `.gitignore`，禁止提交到仓库；
-  - 生产部署建议将生成的音频上传到对象存储/CDN，由静态链接供前端访问。
+  - 新版鉴权已弃用可伪造的 `X-User-Email`，所有付费路径必须依赖后端下发的 Token；
+  - 前端不应硬编码 Token，如需测试请通过环境变量注入；
+  - 生产部署建议将生成的音频上传到对象存储/CDN，由静态链接供前端访问，并确保开启 HTTPS。
+
+## API Authentication & Quotas
+
+### Authentication
+- All costful endpoints (e.g., `/render`) require an API token.
+- Header: `Authorization: Bearer <token>`.
+- Tokens are configured via environment variable `API_KEYS`.
+- In development you may set `AUTH_REQUIRED=false` (NOT recommended for production).
+
+### Pro Tokens
+- Tokens listed in `PRO_USER_TOKENS` bypass daily free quota checks.
+
+### Quotas
+- Daily free quota is per token (`DAILY_FREE_QUOTA`).
+- Storage backends:
+  - memory (dev only)
+  - sqlite (default)
+  - redis (planned)
 
 ## ⚙️ Async Rendering & Task API
 - `POST /render/` → `202 Accepted`，返回 `{"task_id": "..."}`；任务将在后台异步执行。
