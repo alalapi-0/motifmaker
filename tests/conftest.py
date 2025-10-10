@@ -1,9 +1,14 @@
+import os
 import sys
 from pathlib import Path
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+# 中文注释：测试环境默认关闭鉴权，避免大量历史用例因缺少 Token 而失败。
+os.environ.setdefault("AUTH_REQUIRED", "false")
+os.environ.setdefault("QUOTA_BACKEND", "memory")
 
 from motifmaker.config import settings
 from motifmaker import ratelimit

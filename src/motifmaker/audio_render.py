@@ -28,23 +28,17 @@ from .config import (
     HF_API_TOKEN,
     HF_MODEL,
     OUTPUT_DIR,
-    PRO_USER_EMAILS,
+    QUOTA_BACKEND,
     REPLICATE_API_TOKEN,
     REPLICATE_MODEL,
     RENDER_MAX_SECONDS,
     RENDER_TIMEOUT_SEC,
+    USAGE_DB_PATH,
 )
-from .errors import (
-    ConfigError,
-    MMError,
-    RateLimitError,
-    RenderError,
-    RenderTimeout,
-    ValidationError,
-    error_response,
-)
+from .auth import is_pro_token, require_token
+from .errors import ConfigError, MMError, RenderError, RenderTimeout, ValidationError, error_response
 from .logging_setup import get_logger
-from .quota import incr_and_check, today_key
+from .quota import BaseQuotaStorage, create_quota_storage, today_str
 from .ratelimit import rate_limiter
 from .task_manager import TaskSnapshot
 from .utils import ensure_directory
@@ -55,6 +49,25 @@ tasks_router = APIRouter(prefix="/tasks", tags=["RenderTasks"])
 logger = get_logger(__name__)
 
 ensure_dir = ensure_directory
+
+
+_quota_storage: BaseQuotaStorage | None = None
+
+
+def set_quota_storage(storage: BaseQuotaStorage) -> None:
+    """显式注入配额存储实例，方便应用启动时统一创建。"""
+
+    global _quota_storage
+    _quota_storage = storage
+
+
+def _get_quota_storage() -> BaseQuotaStorage:
+    """延迟创建配额存储，确保测试或脚本运行时也能正常计数。"""
+
+    global _quota_storage
+    if _quota_storage is None:
+        _quota_storage = create_quota_storage(QUOTA_BACKEND, USAGE_DB_PATH)
+    return _quota_storage
 
 
 def _safe_outputs_dir() -> Path:
@@ -458,22 +471,6 @@ async def _prepare_midi_file(
     return chosen_midi_path
 
 
-def _rate_limit_check(email: Optional[str], client_ip: str) -> tuple[bool, str, str]:
-    """中文注释：执行每日免费额度校验，返回是否为 Pro 用户及使用的身份标识。"""
-
-    is_pro = bool(email and email in PRO_USER_EMAILS)
-    if is_pro:
-        return True, client_ip, email or ""
-    day, quota_key = today_key(email or client_ip)
-    allowed = incr_and_check(day, quota_key, DAILY_FREE_QUOTA)
-    if not allowed:
-        raise RateLimitError(
-            "daily free quota exceeded",
-            details={"quota": DAILY_FREE_QUOTA, "key": quota_key},
-        )
-    return False, client_ip, email or ""
-
-
 @router.post("/")
 async def render_audio(
     request: Request,
@@ -483,6 +480,7 @@ async def render_audio(
     intensity: Optional[float] = Form(default=0.5),
     sync_form: Optional[str] = Form(default=None),
     _: None = Depends(rate_limiter),
+    token: str = Depends(require_token),
 ):
     """中文注释：创建渲染任务，默认异步排队；开发环境可通过 sync 参数调试同步模式。"""
 
@@ -508,16 +506,42 @@ async def render_audio(
 
         chosen_midi_path = await _prepare_midi_file(midi_file, midi_path)
         client_ip = request.client.host if request.client else "anonymous"
-        raw_email = request.headers.get("X-User-Email")
-        email = raw_email.lower() if raw_email else None
-        # 中文注释：配额计算涉及 SQLite 写入，放到线程池中执行以避免阻塞事件循环。
-        is_pro, client_ip, identity = await asyncio.to_thread(_rate_limit_check, email, client_ip)
+        # 中文注释：subject 表示配额统计主体，正常情况下等于 Token；开发环境允许退化为 "ANON"。
+        subject = token if token else "ANON"
+        storage = _get_quota_storage()
+        # 中文注释：Pro Token 属于内部或付费用户，跳过每日免费额度但仍受速率限制保护。 
+        is_pro_user = token != "ANON" and is_pro_token(token)
+        today = today_str()
+        if is_pro_user:
+            await asyncio.to_thread(storage.incr_and_check, today, subject, 0)
+        else:
+            allowed, used = await asyncio.to_thread(
+                storage.incr_and_check,
+                today,
+                subject,
+                DAILY_FREE_QUOTA,
+            )
+            if not allowed:
+                # 中文注释：匿名请求仅允许在开发模式使用，生产环境应强制传入合法 Token。
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": {
+                            "code": "E_RATE_LIMIT",
+                            "message": "daily free quota exceeded",
+                            "details": {"subject": subject, "used": used, "limit": DAILY_FREE_QUOTA},
+                        },
+                    },
+                    status_code=429,
+                )
+        tier = "pro" if is_pro_user else "free"
+        identity = subject if subject != "ANON" else client_ip
         params = {
             "midi_path": str(chosen_midi_path),
             "style": style or "cinematic",
             "intensity": float(intensity or 0.5),
-            "identity": identity or client_ip,
-            "tier": "pro" if is_pro else "free",
+            "identity": identity,
+            "tier": tier,
         }
 
         async def job(task_id: str) -> Dict[str, Any]:
@@ -532,7 +556,7 @@ async def render_audio(
                 )
             except RenderTimeout:
                 raise
-            except (RenderError, ConfigError, RateLimitError):
+            except (RenderError, ConfigError):
                 raise
             except MMError:
                 raise
@@ -648,6 +672,7 @@ def _snapshot_to_payload(snapshot: TaskSnapshot) -> Dict[str, Any]:
 __all__ = [
     "router",
     "tasks_router",
+    "set_quota_storage",
     "render_via_provider_async",
     "request_with_retry_async",
 ]

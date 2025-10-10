@@ -39,6 +39,17 @@ def _split_list(value: str) -> List[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
+def _to_bool(value: str, *, default: bool) -> bool:
+    """将环境变量转换为布尔值。"""
+
+    lowered = value.strip().lower()
+    if lowered in {"1", "true", "yes", "on"}:
+        return True
+    if lowered in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
 @dataclass
 class Settings:
     """后端运行所需的所有环境配置，支持 .env 与环境变量覆盖。"""
@@ -62,8 +73,12 @@ class Settings:
     render_max_seconds: int = field(default=30)
     render_max_concurrency: int = field(default=2)
     daily_free_quota: int = field(default=10)
-    pro_user_emails: List[str] = field(default_factory=list)
     usage_db_path: str = field(default="var/usage.db")
+    auth_required: bool = field(default=True)
+    api_keys: List[str] = field(default_factory=list)
+    pro_user_tokens: List[str] = field(default_factory=list)
+    quota_backend: str = field(default="sqlite")
+    auth_header: str = field(default="Authorization")
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -92,8 +107,15 @@ class Settings:
             render_max_seconds=int(os.getenv("RENDER_MAX_SECONDS", "30")),
             render_max_concurrency=int(os.getenv("RENDER_MAX_CONCURRENCY", "2")),
             daily_free_quota=int(os.getenv("DAILY_FREE_QUOTA", "10")),
-            pro_user_emails=_split_list(os.getenv("PRO_USER_EMAILS", "")),
             usage_db_path=os.getenv("USAGE_DB_PATH", "var/usage.db"),
+            auth_required=_to_bool(
+                os.getenv("AUTH_REQUIRED", "true"),
+                default=True,
+            ),
+            api_keys=_split_list(os.getenv("API_KEYS", "")),
+            pro_user_tokens=_split_list(os.getenv("PRO_USER_TOKENS", "")),
+            quota_backend=os.getenv("QUOTA_BACKEND", "sqlite"),
+            auth_header=os.getenv("AUTH_HEADER", "Authorization"),
         )
 
 
@@ -115,8 +137,12 @@ RENDER_TIMEOUT_SEC: int = max(1, settings.render_timeout_sec)
 RENDER_MAX_SECONDS: int = max(1, settings.render_max_seconds)
 RENDER_MAX_CONCURRENCY: int = max(1, settings.render_max_concurrency)
 DAILY_FREE_QUOTA: int = settings.daily_free_quota
-PRO_USER_EMAILS: Set[str] = {email.lower() for email in settings.pro_user_emails}
 USAGE_DB_PATH: str = settings.usage_db_path
+AUTH_REQUIRED: bool = settings.auth_required
+API_TOKENS: Set[str] = {token for token in settings.api_keys}
+PRO_USER_TOKENS: Set[str] = {token for token in settings.pro_user_tokens}
+QUOTA_BACKEND: str = settings.quota_backend.lower()
+AUTH_HEADER: str = settings.auth_header
 
 # 中文注释：环境标识用于控制调试行为（例如同步渲染仅在开发环境启用）。
 APP_ENV: str = settings.environment.lower()

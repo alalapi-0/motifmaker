@@ -9,6 +9,7 @@ from typing import Deque, Dict
 
 from fastapi import Request
 
+from .auth import extract_token
 from .config import settings
 from .errors import RateLimitError
 
@@ -25,7 +26,10 @@ def rate_limiter(request: Request) -> None:
     """FastAPI 依赖：按客户端 IP + 路径维度限制每秒请求次数。"""
 
     client_ip = request.client.host if request.client else "anonymous"
-    key = f"{client_ip}:{request.url.path}"
+    token = extract_token(request)
+    # 中文注释：优先按 Token 限流，只有匿名开发流量才退化到按 IP 统计，减少共享出口的误杀。
+    rate_key = f"token:{token}" if token else f"ip:{client_ip}"
+    key = f"{rate_key}:{request.url.path}"
     now = time.monotonic()
     with _LOCK:
         bucket = _RATE_BUCKETS[key]
