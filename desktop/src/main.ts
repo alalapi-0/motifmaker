@@ -131,7 +131,8 @@ function setupCsp() {
       ...details.responseHeaders,
       'Content-Security-Policy': [policy]
     } as Record<string, string[]>;
-    callback({ responseHeaders });
+    // 中文注释：类型定义仅接受字符串，为保留数组写法在此断言为 any，实际运行时行为保持不变。
+    callback({ responseHeaders: responseHeaders as any });
   });
 }
 

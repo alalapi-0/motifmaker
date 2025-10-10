@@ -7,8 +7,31 @@ name = "motifmaker"
 version = "0.1.0"
 description = "A layered music generation prototype from natural language prompts"
 requires-python = ">=3.10"
-authors = [{ name = "", email = "" }]
-dependencies = []
+# 中文注释：填写有效作者信息，避免安装校验空邮箱失败。
+authors = [{ name = "MotifMaker Team", email = "dev@example.com" }]
+# 中文注释：统一依赖到 pyproject.toml，确保 pip/uv 安装 `motifmaker` 即可获得运行时所需库。
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.6",
+    "pydantic>=2.8.2",
+    "python-multipart>=0.0.9",
+    "httpx>=0.27.2",
+    "numpy>=1.26.4",
+    "music21>=9.1.0",
+    "pretty_midi>=0.2.10",
+    "mido>=1.3.0",
+    "typer>=0.12.3",
+    "python-dotenv>=1.0.1",
+]
+
+[project.optional-dependencies]
+# 中文注释：开发环境使用 extras 安装，`pip install .[dev]` 可一次性获取测试与静态检查依赖。
+dev = [
+    "pytest>=8.3.2",
+    "pytest-asyncio>=0.23.7",
+    "coverage>=7.6.0",
+    "ruff>=0.5.7",
+]
 
 [project.scripts]
 motifmaker = "motifmaker.cli:app"
