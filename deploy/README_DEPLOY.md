@@ -41,25 +41,21 @@
    ```
    - `.env` 含敏感信息，请勿提交到仓库。
 
-4. **注册 systemd 服务**
+4. **检查并清理账户中的 VPS 实例**
    ```bash
-   bash deploy/scripts/setup_systemd.sh
+   python deploy/scripts/manage_vps_inventory.py
    ```
-   - 脚本会生成 `motifmaker.service`。完成后根据提示执行 `systemctl daemon-reload && systemctl enable --now motifmaker`。
+   - 脚本默认调用 DigitalOcean 的 `doctl` 列表命令，如需适配其他云厂商，可通过设置 `MOTIFMAKER_VPS_LIST_CMD` / `MOTIFMAKER_VPS_DESTROY_CMD` 环境变量覆盖。
+   - 若账户中存在旧实例，脚本会显示列表并提供销毁选项；若无实例则直接提示结果。
 
-5. **配置反向代理**
-   - Nginx：将 `deploy/nginx/motifmaker.conf.example` 拷贝到 `/etc/nginx/conf.d/` 并按注释修改域名/路径。
-   - Caddy：将 `deploy/caddy/Caddyfile.example` 拷贝到 `/etc/caddy/`。
-   - 记得重新加载代理服务并检查 TLS。
-
-6. **健康检查与烟囱测试**
+5. **健康检查与烟囱测试**
    ```bash
    bash deploy/scripts/check_health.sh
    bash deploy/scripts/smoke_test.sh
    ```
    - 如有失败，根据脚本输出排查后端服务与反向代理。
 
-7. **防火墙与安全**
+6. **防火墙与安全**
    - 保持仅开放 22/80/443 端口。
    - 后端 FastAPI 进程监听 `127.0.0.1`，只通过反向代理对外发布。
 
