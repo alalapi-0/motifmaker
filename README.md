@@ -80,6 +80,22 @@ Prompt → 解析层(parsing) → 骨架JSON(schema) → 动机生成(motif)
 4. Use the web interface to generate, preview, re-generate, and export 8-bit MP3.
 5. Click Cleanup to reset workspace.
 
+## Project Persistence
+MotifMaker now supports saving and loading projects.
+
+CLI:
+  python tools/cli.py → Project Management menu
+
+Web UI:
+  Buttons in “Project Management” section allow you to:
+  - List saved projects
+  - Save current session
+  - Load existing project and preview
+  - Delete or rename projects
+
+All metadata is stored in data/motifmaker.db (SQLite).
+No binary files are committed to Git.
+
 ## 🎨 New UI Flow (Version 0.3)
 - Black-Red Metal Theme
 - Step-by-Step Music Generation
