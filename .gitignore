@@ -142,3 +142,7 @@ outputs/
 *.mid
 *.wav
 *.mp3
+
+# Web app temp
+webapp/**pycache**/
+webapp/static/*.map
