@@ -137,3 +137,8 @@ logs/
 # Persisted project snapshots
 /projects/
 
+# 8-bit CLI generated audio artifacts
+outputs/
+*.mid
+*.wav
+*.mp3
