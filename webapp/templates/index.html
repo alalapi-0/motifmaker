@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MotifMaker 8-bit Web UI</title>
+    <!-- 简单的内联样式即可满足演示需求 -->
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        margin: 2rem;
+        background: #0d1117;
+        color: #e6edf3;
+      }
+      h1 {
+        text-align: center;
+      }
+      button {
+        display: inline-block;
+        margin: 0.3rem;
+        padding: 0.6rem 1rem;
+        border: none;
+        border-radius: 4px;
+        background: #238636;
+        color: #fff;
+        cursor: pointer;
+      }
+      button.secondary {
+        background: #8957e5;
+      }
+      button.danger {
+        background: #d1242f;
+      }
+      button:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+      }
+      #controls {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: 0.5rem;
+        margin-bottom: 1.5rem;
+      }
+      #preview-container {
+        margin: 1rem auto;
+        text-align: center;
+      }
+      pre {
+        background: #161b22;
+        padding: 1rem;
+        border-radius: 6px;
+        min-height: 160px;
+        overflow-x: auto;
+      }
+      a.download-link {
+        display: inline-block;
+        margin-top: 0.5rem;
+        color: #58a6ff;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- 顶部标题强调当前页面的用途 -->
+    <h1>MotifMaker 8-bit Web UI</h1>
+    <!-- 控制按钮容器，顺序与 CLI 一致，方便用户理解流程 -->
+    <div id="controls">
+      <button id="btn-check">Check Environment</button>
+      <button id="btn-motif">Generate Motif</button>
+      <button id="btn-motif-regenerate" class="secondary" hidden>
+        Regenerate Motif
+      </button>
+      <button id="btn-melody" disabled>Generate Melody &amp; Arrangement</button>
+      <button id="btn-melody-regenerate" class="secondary" hidden>
+        Regenerate Melody &amp; Arrangement
+      </button>
+      <button id="btn-render" disabled>Render Final MP3</button>
+      <button id="btn-cleanup" class="danger">Cleanup Outputs</button>
+      <button id="btn-shutdown" class="danger">Shutdown Server</button>
+    </div>
+
+    <!-- 预览播放器区域，音频地址由脚本动态设置 -->
+    <div id="preview-container">
+      <audio id="preview-player" controls></audio>
+      <div>
+        <a id="download-link" class="download-link" href="#" hidden>Download MP3</a>
+      </div>
+    </div>
+
+    <!-- 日志信息展示区，显示接口返回的 JSON 数据 -->
+    <pre id="log">Click a button to begin.</pre>
+
+    <script src="/static/script.js"></script>
+  </body>
+</html>

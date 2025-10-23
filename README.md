@@ -72,6 +72,14 @@ Prompt → 解析层(parsing) → 骨架JSON(schema) → 动机生成(motif)
   - 若请求失败，Shoelace `<sl-alert>` 会在顶部出现错误提示，常见原因包括跨域配置或后端服务未启动。
   - MIDI 解析失败会在日志区提示，可下载文件手动导入 DAW 检查。
 
+## Web UI Mode
+
+1. Install deps: `pip install -r tools/requirements.txt fastapi uvicorn jinja2`
+2. Run: `uvicorn webapp.main:app --reload --port 8000`
+3. Open browser at [http://127.0.0.1:8000](http://127.0.0.1:8000)
+4. Use the web interface to generate, preview, re-generate, and export 8-bit MP3.
+5. Click Cleanup to reset workspace.
+
 ## 🎨 New UI Flow (Version 0.3)
 - Black-Red Metal Theme
 - Step-by-Step Music Generation
