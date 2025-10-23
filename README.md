@@ -304,3 +304,34 @@ Run locally:
   - 提供云存储凭据（S3、OSS 等）以保存渲染结果。
 - **本地开发环境准备**：
   - 安装 Node.js ≥ 18 与 Python ≥ 3.10，以确保前后端均可正常运行。
+
+
+## Lightweight 8-bit Music Generator (CLI)
+
+Run:
+```
+pip install -r tools/requirements.txt
+python tools/cli.py
+```
+
+Menu:
+```
+1) Check environment
+2) Generate motif (previewable)
+3) Generate melody & arrangement (previewable)
+4) Render 8-bit & export MP3
+5) Cleanup / Reset
+6) Exit
+```
+
+Options:
+```
+--run-all     Run all steps automatically
+--keep-wav    Keep intermediate WAV files
+```
+
+Notes:
+- `pydub` requires a working `ffmpeg` installation for MP3 export.
+- All rendered audio stays under the local `outputs/` directory and is ignored by git.
+- The repository ships without any audio binaries; use the CLI to preview content on demand.
+- Users can regenerate previews at each step until they are satisfied.
