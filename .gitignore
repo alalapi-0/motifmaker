@@ -137,6 +137,10 @@ logs/
 # Persisted project snapshots
 /projects/
 
+# SQLite persistence files
+data/
+*.db
+
 # 8-bit CLI generated audio artifacts
 outputs/
 *.mid

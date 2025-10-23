@@ -7,7 +7,7 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
@@ -17,6 +17,7 @@ from fastapi.templating import Jinja2Templates
 from tools import generator
 from tools.cleanup import cleanup_outputs
 from tools import synth
+from tools import db as project_db
 
 # Web 应用所在的根目录，便于拼装模板与静态文件路径
 BASE_DIR = Path(__file__).resolve().parent
@@ -28,6 +29,7 @@ OUTPUT_DIR = generator.OUTPUT_DIR
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(title="MotifMaker 8-bit Web UI")
+project_db.init_db()
 
 # 配置模板系统与静态文件服务，便于浏览器加载页面与脚本
 try:
@@ -50,6 +52,100 @@ def _safe_output_path(filename: str) -> Path:
     except ValueError as exc:  # noqa: B904
         raise HTTPException(status_code=400, detail="Invalid file path") from exc
     return resolved
+
+
+def _compute_length_beats(arrangement: Optional[Dict[str, Any]]) -> Optional[int]:
+    """根据编曲数据估算总拍数，用于统计时长。"""
+
+    if not arrangement:
+        return None
+    melody = arrangement.get("melody") if isinstance(arrangement, dict) else None
+    if not isinstance(melody, list):
+        return None
+    total = 0.0
+    for note in melody:
+        if isinstance(note, dict):
+            duration = note.get("duration")
+            if isinstance(duration, (int, float)):
+                total += float(duration)
+    if total <= 0:
+        return None
+    return int(round(total))
+
+
+def _safe_int(value: object) -> Optional[int]:
+    """尝试将传入值转换为整数，失败则返回 None。"""
+
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _collect_project_payload(mp3_name: Optional[str]) -> Dict[str, Optional[object]]:
+    """组合保存项目所需的数据，若缺少关键文件则抛出异常。"""
+
+    motif_path = OUTPUT_DIR / "motif.json"
+    motif_scale: Optional[str] = None
+    motif_value: Optional[str] = None
+    if motif_path.exists():
+        motif_value = str(motif_path)
+        try:
+            with motif_path.open("r", encoding="utf-8") as fh:
+                motif_meta = json.load(fh)
+            motif_scale = motif_meta.get("scale")
+        except (OSError, json.JSONDecodeError):
+            motif_scale = None
+
+    arrangement_path = OUTPUT_DIR / "arrangement.json"
+    if not arrangement_path.exists():
+        raise ValueError("Arrangement data not found. Please generate melody first.")
+
+    try:
+        with arrangement_path.open("r", encoding="utf-8") as fh:
+            arrangement = json.load(fh)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("Failed to read arrangement data.") from exc
+
+    if not mp3_name:
+        raise ValueError("MP3 name is required for project saving.")
+
+    mp3_path = _safe_output_path(mp3_name)
+    if not mp3_path.exists():
+        raise FileNotFoundError(str(mp3_path))
+
+    length_beats = _compute_length_beats(arrangement)
+    bpm_value = arrangement.get("bpm") if isinstance(arrangement, dict) else None
+
+    return {
+        "motif_path": motif_value,
+        "arrangement_path": str(arrangement_path),
+        "mp3_path": str(mp3_path),
+        "bpm": _safe_int(bpm_value),
+        "scale": motif_scale,
+        "length": _safe_int(length_beats),
+    }
+
+
+def _mp3_url_from_path(mp3_path: Optional[str]) -> Optional[str]:
+    """将文件路径转换为对外可访问的 URL。"""
+
+    if not mp3_path:
+        return None
+    candidate = Path(mp3_path)
+    if not candidate.exists():
+        return None
+    try:
+        candidate.relative_to(OUTPUT_DIR)
+    except ValueError:
+        return None
+    return f"/outputs/{candidate.name}"
+
+
+def _error_response(message: str, status_code: int = 400) -> JSONResponse:
+    """统一的错误响应格式，包含 error 标记与消息。"""
+
+    return JSONResponse(status_code=status_code, content={"error": True, "message": message})
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -160,6 +256,105 @@ async def cleanup_endpoint() -> JSONResponse:
         "status": "ok",
     }
     return JSONResponse(status_code=200, content=response)
+
+
+@app.get("/projects")
+async def list_projects_endpoint() -> JSONResponse:
+    """返回所有已保存项目的列表，附带可用的 MP3 链接。"""
+
+    project_db.init_db()
+    raw_projects = project_db.list_projects()
+    projects = []
+    for item in raw_projects:
+        entry = dict(item)
+        entry["mp3_url"] = _mp3_url_from_path(entry.get("mp3_path"))
+        projects.append(entry)
+    print(f"Listing {len(projects)} saved project(s) via API.")
+    return JSONResponse(status_code=200, content={"projects": projects})
+
+
+@app.post("/projects")
+async def save_project_endpoint(request: Request) -> JSONResponse:
+    """保存当前输出目录中的项目数据。"""
+
+    payload = await request.json()
+    name = (payload.get("name") or "").strip()
+    mp3_name = payload.get("mp3_name") or payload.get("mp3") or payload.get("mp3_path")
+    if not name:
+        name = datetime.now().strftime("Project %Y-%m-%d %H:%M:%S")
+
+    project_db.init_db()
+    try:
+        project_payload = _collect_project_payload(mp3_name)
+        project_id = project_db.save_project(
+            name=name,
+            motif_path=project_payload["motif_path"],
+            arrangement_path=project_payload["arrangement_path"],
+            mp3_path=project_payload["mp3_path"],
+            bpm=project_payload["bpm"],
+            scale=project_payload["scale"],
+            length=project_payload["length"],
+        )
+    except ValueError as exc:
+        return _error_response(str(exc), status_code=400)
+    except FileNotFoundError:
+        return _error_response("MP3 file not found. Please render before saving.", status_code=400)
+    except Exception as exc:  # noqa: BLE001
+        return _error_response(f"Unexpected error: {exc}", status_code=500)
+
+    print(f"Saved project #{project_id} with name '{name}' via API.")
+    return JSONResponse(status_code=201, content={"id": project_id, "name": name})
+
+
+@app.get("/projects/{project_id}")
+async def load_project_endpoint(project_id: int) -> JSONResponse:
+    """根据项目 ID 返回完整信息，附带 MP3 URL。"""
+
+    project_db.init_db()
+    try:
+        project = project_db.load_project(project_id)
+    except ValueError:
+        return _error_response("Project not found.", status_code=404)
+
+    response = {
+        "project": project,
+        "mp3_url": _mp3_url_from_path(project.get("mp3_path")),
+    }
+    print(f"Loaded project #{project_id} via API.")
+    return JSONResponse(status_code=200, content=response)
+
+
+@app.delete("/projects/{project_id}")
+async def delete_project_endpoint(project_id: int) -> JSONResponse:
+    """删除项目记录并清理关联文件。"""
+
+    project_db.init_db()
+    try:
+        project_db.delete_project(project_id)
+    except ValueError:
+        return _error_response("Project not found.", status_code=404)
+
+    print(f"Deleted project #{project_id} via API.")
+    return JSONResponse(status_code=200, content={"status": "deleted", "id": project_id})
+
+
+@app.patch("/projects/{project_id}/rename")
+async def rename_project_endpoint(project_id: int, request: Request) -> JSONResponse:
+    """更新项目名称，支持前端重命名操作。"""
+
+    payload = await request.json()
+    new_name = (payload.get("name") or payload.get("new_name") or "").strip()
+    if not new_name:
+        return _error_response("New project name is required.")
+
+    project_db.init_db()
+    try:
+        project_db.rename_project(project_id, new_name)
+    except ValueError:
+        return _error_response("Project not found.", status_code=404)
+
+    print(f"Renamed project #{project_id} to '{new_name}' via API.")
+    return JSONResponse(status_code=200, content={"status": "renamed", "id": project_id, "name": new_name})
 
 
 def _delayed_shutdown() -> None:

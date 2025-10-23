@@ -58,6 +58,35 @@
         margin-top: 0.5rem;
         color: #58a6ff;
       }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 1rem;
+        background: #161b22;
+        border-radius: 6px;
+        overflow: hidden;
+      }
+      th,
+      td {
+        padding: 0.6rem;
+        border-bottom: 1px solid #30363d;
+        text-align: left;
+      }
+      tr:last-child td {
+        border-bottom: none;
+      }
+      tbody tr.selected {
+        background: #1f6feb33;
+      }
+      #project-controls {
+        margin-top: 1.5rem;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+      }
+      #project-section {
+        margin-top: 2rem;
+      }
     </style>
   </head>
   <body>
@@ -89,6 +118,30 @@
 
     <!-- 日志信息展示区，显示接口返回的 JSON 数据 -->
     <pre id="log">Click a button to begin.</pre>
+
+    <!-- 项目管理区块，提供保存、加载与删除等功能 -->
+    <section id="project-section">
+      <h2>Project Management</h2>
+      <div id="project-controls">
+        <button id="btn-project-list">List Projects</button>
+        <button id="btn-project-save" class="secondary">Save Current Project</button>
+        <button id="btn-project-load">Load Selected Project</button>
+        <button id="btn-project-delete" class="danger">Delete Selected Project</button>
+        <button id="btn-project-rename" class="secondary">Rename Selected Project</button>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Select</th>
+            <th>Name</th>
+            <th>Created At</th>
+            <th>Length (beats)</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="project-table-body"></tbody>
+      </table>
+    </section>
 
     <script src="/static/script.js"></script>
   </body>
