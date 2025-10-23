@@ -96,6 +96,19 @@ Web UI:
 All metadata is stored in data/motifmaker.db (SQLite).
 No binary files are committed to Git.
 
+## 🎛️ Mix & Effect Control
+
+MotifMaker now includes an 8-bit mixing panel.
+
+CLI:
+Select "Mix & Effect Control" to adjust volume, panning, EQ, reverb.
+
+Web UI:
+
+* Auto Mix button suggests balanced settings.
+* Manual sliders let you tweak sound.
+* Preview Mix for real-time listening.
+
 ## 🎨 New UI Flow (Version 0.3)
 - Black-Red Metal Theme
 - Step-by-Step Music Generation

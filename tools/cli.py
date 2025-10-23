@@ -10,11 +10,13 @@ from typing import Optional
 
 from . import generator
 from . import db as project_db
+from . import mixer
 from .cleanup import cleanup_outputs
 from .synth import play_audio, synthesize_8bit_wav, synthesize_preview, wav_to_mp3
 
 # 统一输出目录，所有临时文件都放在这里
 OUTPUT_DIR = Path(__file__).resolve().parents[1] / "outputs"
+MIX_OUTPUT_PATH = OUTPUT_DIR / "mixed_latest.wav"
 
 
 class SessionState(dict):
@@ -24,6 +26,9 @@ class SessionState(dict):
     melody: Optional[list]
     arrangement: Optional[dict]
     final_mp3: Optional[Path]
+    mix_params: Optional[dict]
+    mix_output: Optional[Path]
+    mix_preview: Optional[Path]
 
 
 def _compute_length_beats(arrangement: Optional[dict]) -> Optional[int]:
@@ -57,6 +62,58 @@ def _ensure_outputs_dir() -> None:
     """确保输出目录存在。"""
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _load_arrangement(state: SessionState) -> Optional[dict]:
+    """必要时从磁盘加载编曲数据，供混音与渲染使用。"""
+
+    arrangement = state.get("arrangement")
+    if isinstance(arrangement, dict):
+        return arrangement
+    arrangement_path = state.get("arrangement_path")
+    if arrangement_path and Path(arrangement_path).exists():
+        try:
+            with Path(arrangement_path).open("r", encoding="utf-8") as fh:
+                arrangement = json.load(fh)
+            state["arrangement"] = arrangement
+            return arrangement
+        except (OSError, json.JSONDecodeError):
+            return None
+    return None
+
+
+def _perform_mix(state: SessionState, params: dict) -> bool:
+    """根据传入参数执行混音并自动生成预览。"""
+
+    arrangement = _load_arrangement(state)
+    if not arrangement:
+        print("Arrangement missing. Please generate melody first.")
+        return False
+
+    _ensure_outputs_dir()
+    try:
+        result = mixer.apply_mixing(arrangement, params, MIX_OUTPUT_PATH)
+    except Exception as exc:  # noqa: BLE001
+        print(f"Mixing failed: {exc}")
+        return False
+
+    preview_path = None
+    try:
+        preview_path = mixer.preview_mix(MIX_OUTPUT_PATH)
+    except Exception as exc:  # noqa: BLE001
+        print(f"Unable to create preview: {exc}")
+    else:
+        try:
+            play_audio(preview_path)
+        except Exception as exc:  # noqa: BLE001
+            print(f"Unable to play preview: {exc}")
+
+    state["mix_params"] = result
+    state["mix_output"] = MIX_OUTPUT_PATH
+    if preview_path:
+        state["mix_preview"] = preview_path
+    print(f"Mix rendered to {MIX_OUTPUT_PATH}")
+    return True
 
 
 def _interactive_preview(result, preview_name: str, prompt: str) -> Optional[str]:
@@ -155,8 +212,111 @@ def handle_generate_melody_and_arrangement(state: SessionState) -> bool:
         if answer == "r":
             print("Regenerating arrangement...")
             continue
-        print("Arrangement stage cancelled.")
-        return False
+            print("Arrangement stage cancelled.")
+            return False
+
+
+def handle_auto_mix(state: SessionState) -> None:
+    """执行自动混音并立即生成预览。"""
+
+    arrangement = _load_arrangement(state)
+    if not arrangement:
+        print("Please generate melody and arrangement first.")
+        return
+
+    print("Calculating auto mix suggestions...")
+    params = mixer.auto_mix(arrangement)
+    if _perform_mix(state, params):
+        print("Auto mix applied. Preview played if audio backend is available.")
+
+
+def handle_manual_mix(state: SessionState) -> None:
+    """询问各项参数后执行手动混音。"""
+
+    arrangement = _load_arrangement(state)
+    if not arrangement:
+        print("Please generate melody and arrangement first.")
+        return
+
+    defaults = state.get("mix_params")
+    if not isinstance(defaults, dict):
+        defaults = mixer.auto_mix(arrangement)
+
+    def _prompt_value(label: str, current: float) -> float:
+        prompt = f"{label} [{current:.2f}]: "
+        user_input = input(prompt).strip()
+        if not user_input:
+            return current
+        try:
+            return float(user_input)
+        except ValueError:
+            print("Invalid number. Keeping previous value.")
+            return current
+
+    params = {
+        "main_volume": _prompt_value("Main volume (0-1)", defaults.get("main_volume", 0.85)),
+        "bg_volume": _prompt_value("Background volume (0-1)", defaults.get("bg_volume", 0.6)),
+        "noise_volume": _prompt_value("Noise volume (0-1)", defaults.get("noise_volume", 0.35)),
+        "panning": {
+            "main": _prompt_value("Main panning (-1 left / 1 right)", defaults.get("panning", {}).get("main", 0.0)),
+            "bg": _prompt_value("Background panning", defaults.get("panning", {}).get("bg", 0.3)),
+            "noise": _prompt_value("Noise panning", defaults.get("panning", {}).get("noise", -0.25)),
+        },
+        "reverb": _prompt_value("Reverb amount (0-1)", defaults.get("reverb", 0.18)),
+        "eq_low": _prompt_value("EQ Low (0-2)", defaults.get("eq_low", 1.0)),
+        "eq_high": _prompt_value("EQ High (0-2)", defaults.get("eq_high", 1.05)),
+    }
+
+    if _perform_mix(state, params):
+        print("Manual mix applied. You can run Preview Mix again if needed.")
+
+
+def handle_preview_mix(state: SessionState) -> None:
+    """重新生成并播放最新混音的 5 秒预览。"""
+
+    mix_path = state.get("mix_output")
+    if not mix_path:
+        print("No mix available yet. Please run Auto Mix or Manual Mix first.")
+        return
+
+    try:
+        preview_path = mixer.preview_mix(Path(mix_path))
+        state["mix_preview"] = preview_path
+    except Exception as exc:  # noqa: BLE001
+        print(f"Failed to generate preview: {exc}")
+        return
+
+    try:
+        play_audio(preview_path)
+    except Exception as exc:  # noqa: BLE001
+        print(f"Unable to play preview: {exc}")
+
+
+def handle_mix_menu(state: SessionState) -> None:
+    """混音控制子菜单，允许自动或手动调整参数。"""
+
+    while True:
+        print(
+            """
+Mix & Effect Control
+1) Auto Mix
+2) Manual Mix
+3) Preview Mix
+4) Back
+Select option [1-4]: """,
+            end="",
+        )
+        choice = input().strip()
+        if choice == "1":
+            handle_auto_mix(state)
+        elif choice == "2":
+            handle_manual_mix(state)
+        elif choice == "3":
+            handle_preview_mix(state)
+        elif choice == "4":
+            break
+        else:
+            print("Invalid option. Please select a number between 1 and 4.")
 
 
 def handle_render_and_export(state: SessionState, keep_wav: bool) -> bool:
@@ -473,9 +633,10 @@ MotifMaker - 8bit Simplified CLI
 3) Generate melody & arrangement
 4) Render 8-bit and export MP3
 5) Cleanup / Reset (delete outputs)
-6) Project Management
-7) Exit
-Select option [1-7]: """,
+6) Mix & Effect Control
+7) Project Management
+8) Exit
+Select option [1-8]: """,
             end="",
         )
         choice = input().strip()
@@ -491,12 +652,14 @@ Select option [1-7]: """,
         elif choice == "5":
             handle_cleanup(state)
         elif choice == "6":
-            handle_project_menu(state)
+            handle_mix_menu(state)
         elif choice == "7":
+            handle_project_menu(state)
+        elif choice == "8":
             print("Goodbye!")
             break
         else:
-            print("Invalid option. Please select a number between 1 and 7.")
+            print("Invalid option. Please select a number between 1 and 8.")
 
 
 if __name__ == "__main__":

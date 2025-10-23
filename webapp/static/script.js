@@ -17,10 +17,37 @@ const btnProjectLoad = document.getElementById("btn-project-load");
 const btnProjectDelete = document.getElementById("btn-project-delete");
 const btnProjectRename = document.getElementById("btn-project-rename");
 const projectTableBody = document.getElementById("project-table-body");
+const btnAutoMix = document.getElementById("btn-auto-mix");
+const btnApplyMix = document.getElementById("btn-apply-mix");
+const btnPreviewMix = document.getElementById("btn-preview-mix");
+const mixPreviewPlayer = document.getElementById("mix-preview");
+const mixControls = {
+  mainVolume: document.getElementById("mix-main-volume"),
+  bgVolume: document.getElementById("mix-bg-volume"),
+  noiseVolume: document.getElementById("mix-noise-volume"),
+  mainPan: document.getElementById("mix-main-pan"),
+  bgPan: document.getElementById("mix-bg-pan"),
+  noisePan: document.getElementById("mix-noise-pan"),
+  reverb: document.getElementById("mix-reverb"),
+  eqLow: document.getElementById("mix-eq-low"),
+  eqHigh: document.getElementById("mix-eq-high"),
+};
+const mixOutputs = {
+  mainVolume: document.getElementById("mix-main-volume-value"),
+  bgVolume: document.getElementById("mix-bg-volume-value"),
+  noiseVolume: document.getElementById("mix-noise-volume-value"),
+  mainPan: document.getElementById("mix-main-pan-value"),
+  bgPan: document.getElementById("mix-bg-pan-value"),
+  noisePan: document.getElementById("mix-noise-pan-value"),
+  reverb: document.getElementById("mix-reverb-value"),
+  eqLow: document.getElementById("mix-eq-low-value"),
+  eqHigh: document.getElementById("mix-eq-high-value"),
+};
 
 let currentMp3Name = null;
 let selectedProjectId = null;
 let projectCache = [];
+let latestMixPreviewUrl = null;
 
 // 工具函数：统一处理日志输出，字符串直接打印，其他对象转为格式化 JSON
 function updateLog(data) {
@@ -43,6 +70,17 @@ function playPreview(url) {
   });
 }
 
+// 混音预览播放器与主预览相互独立，便于来回比较
+function playMixPreview(url) {
+  if (!url) {
+    return;
+  }
+  const cacheBusted = url.includes("?") ? `${url}&t=${Date.now()}` : `${url}?t=${Date.now()}`;
+  latestMixPreviewUrl = cacheBusted;
+  mixPreviewPlayer.src = cacheBusted;
+  mixPreviewPlayer.play().catch(() => {});
+}
+
 // 重置下载链接与播放器状态，适用于清理与流程重置
 function resetMediaState() {
   audioPlayer.pause();
@@ -51,6 +89,72 @@ function resetMediaState() {
   downloadLink.hidden = true;
   downloadLink.removeAttribute("href");
   currentMp3Name = null;
+  mixPreviewPlayer.pause();
+  mixPreviewPlayer.removeAttribute("src");
+  mixPreviewPlayer.load();
+  latestMixPreviewUrl = null;
+}
+
+// 实时更新滑块右侧的数值显示，方便精确调节
+function bindMixSlider(input, output) {
+  input.addEventListener("input", () => {
+    output.textContent = Number(input.value).toFixed(2);
+  });
+  // 初始化一次显示
+  output.textContent = Number(input.value).toFixed(2);
+}
+
+bindMixSlider(mixControls.mainVolume, mixOutputs.mainVolume);
+bindMixSlider(mixControls.bgVolume, mixOutputs.bgVolume);
+bindMixSlider(mixControls.noiseVolume, mixOutputs.noiseVolume);
+bindMixSlider(mixControls.mainPan, mixOutputs.mainPan);
+bindMixSlider(mixControls.bgPan, mixOutputs.bgPan);
+bindMixSlider(mixControls.noisePan, mixOutputs.noisePan);
+bindMixSlider(mixControls.reverb, mixOutputs.reverb);
+bindMixSlider(mixControls.eqLow, mixOutputs.eqLow);
+bindMixSlider(mixControls.eqHigh, mixOutputs.eqHigh);
+
+// 读取滑块当前值，构建发送给后端的参数字典
+function collectMixParams() {
+  return {
+    main_volume: Number(mixControls.mainVolume.value),
+    bg_volume: Number(mixControls.bgVolume.value),
+    noise_volume: Number(mixControls.noiseVolume.value),
+    panning: {
+      main: Number(mixControls.mainPan.value),
+      bg: Number(mixControls.bgPan.value),
+      noise: Number(mixControls.noisePan.value),
+    },
+    reverb: Number(mixControls.reverb.value),
+    eq_low: Number(mixControls.eqLow.value),
+    eq_high: Number(mixControls.eqHigh.value),
+  };
+}
+
+// 将后端返回的建议值写回滑块，保持界面与实际状态一致
+function applyMixParams(params) {
+  if (!params) {
+    return;
+  }
+  const safe = (value, fallback) => (typeof value === "number" ? value : fallback);
+  mixControls.mainVolume.value = safe(params.main_volume, Number(mixControls.mainVolume.value));
+  mixControls.bgVolume.value = safe(params.bg_volume, Number(mixControls.bgVolume.value));
+  mixControls.noiseVolume.value = safe(params.noise_volume, Number(mixControls.noiseVolume.value));
+  const pan = params.panning || {};
+  mixControls.mainPan.value = safe(pan.main, Number(mixControls.mainPan.value));
+  mixControls.bgPan.value = safe(pan.bg, Number(mixControls.bgPan.value));
+  mixControls.noisePan.value = safe(pan.noise, Number(mixControls.noisePan.value));
+  mixControls.reverb.value = safe(params.reverb, Number(mixControls.reverb.value));
+  mixControls.eqLow.value = safe(params.eq_low, Number(mixControls.eqLow.value));
+  mixControls.eqHigh.value = safe(params.eq_high, Number(mixControls.eqHigh.value));
+
+  // 更新显示文本
+  Object.entries(mixOutputs).forEach(([key, output]) => {
+    const control = mixControls[key];
+    if (control) {
+      output.textContent = Number(control.value).toFixed(2);
+    }
+  });
 }
 
 // 高亮选中的行，便于用户确认当前操作对象
@@ -206,6 +310,47 @@ btnRender.addEventListener("click", async () => {
     downloadLink.hidden = false;
     currentMp3Name = data.filename || null;
   }
+});
+
+// 自动混音：请求后端参数并刷新滑块
+btnAutoMix.addEventListener("click", async () => {
+  try {
+    const data = await requestJSON("/mix/auto");
+    if (data.params) {
+      applyMixParams(data.params);
+    }
+    if (data.preview_url) {
+      playMixPreview(data.preview_url);
+    }
+  } catch (error) {
+    // requestJSON 已处理错误日志
+  }
+});
+
+// 应用当前滑块参数，后端返回的值会再次刷新滑块
+btnApplyMix.addEventListener("click", async () => {
+  const params = collectMixParams();
+  try {
+    const data = await requestJSON("/mix/apply", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ params }),
+    });
+    if (data.params) {
+      applyMixParams(data.params);
+    }
+    if (data.preview_url) {
+      playMixPreview(data.preview_url);
+    }
+  } catch (error) {
+    // 错误已记录
+  }
+});
+
+// 快速试听最近一次混音结果
+btnPreviewMix.addEventListener("click", () => {
+  const url = latestMixPreviewUrl || "/mix/preview?file=preview_mix.wav";
+  playMixPreview(url);
 });
 
 // 清理 outputs 目录，同时重置按钮与媒体状态

@@ -147,6 +147,9 @@ outputs/
 *.wav
 *.mp3
 
+# Mix temporary
+outputs/preview_mix.wav
+
 # Web app temp
 webapp/**pycache**/
 webapp/static/*.map

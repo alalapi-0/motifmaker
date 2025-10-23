@@ -92,28 +92,77 @@ def _mix_tracks(tracks: Sequence[np.ndarray]) -> np.ndarray:
 
 
 def _write_uint8_wav(waveform: np.ndarray, out_wav: Path, sample_rate: int) -> None:
-    """以 8-bit PCM 格式写入 WAV 文件。"""
+    """以 8-bit PCM 格式写入 WAV 文件，支持单声道或立体声。"""
 
-    uint8_wave = _float_to_uint8(waveform)
+    # 所有输入都先转换为 numpy 数组，并确保是浮点型，便于后续裁剪
+    data = np.asarray(waveform, dtype=float)
+    if data.ndim == 1:
+        # 单声道直接写入，沿用旧逻辑
+        uint8_wave = _float_to_uint8(data)
+        nchannels = 1
+        payload = uint8_wave.tobytes()
+    elif data.ndim == 2:
+        # 立体声允许 (2, N) 或 (N, 2) 两种排列
+        if 2 in data.shape:
+            if data.shape[0] == 2:
+                stereo = data
+            elif data.shape[1] == 2:
+                stereo = data.T
+            else:
+                raise ValueError("Stereo waveform must have shape (2, N) or (N, 2)")
+        else:
+            raise ValueError("Stereo waveform must include two channels")
+        left_uint8 = _float_to_uint8(stereo[0])
+        right_uint8 = _float_to_uint8(stereo[1])
+        interleaved = np.empty(left_uint8.size * 2, dtype=np.uint8)
+        interleaved[0::2] = left_uint8
+        interleaved[1::2] = right_uint8
+        nchannels = 2
+        payload = interleaved.tobytes()
+    else:
+        raise ValueError("Waveform must be 1-D (mono) or 2-D (stereo)")
+
     with wave.open(str(out_wav), "wb") as wav_file:
-        wav_file.setnchannels(1)
+        wav_file.setnchannels(nchannels)
         wav_file.setsampwidth(1)  # 8-bit PCM 每个样本 1 字节
         wav_file.setframerate(sample_rate)
-        wav_file.writeframes(uint8_wave.tobytes())
+        wav_file.writeframes(payload)
 
 
-def _build_arrangement_wave(arrangement: Dict[str, object], sample_rate: int, limit_seconds: float | None = None) -> np.ndarray:
-    """根据编曲结构生成混合波形，可选限制长度用于预览。"""
+def save_uint8_wav(waveform: np.ndarray, out_wav: Path, sample_rate: int) -> None:
+    """对外暴露的 WAV 写入封装，供混音模块复用。"""
+
+    _write_uint8_wav(waveform, out_wav, sample_rate)
+
+
+def render_tracks(arrangement: Dict[str, object], sample_rate: int, limit_seconds: float | None = None) -> Dict[str, np.ndarray]:
+    """生成三轨 8-bit 波形，返回包含主旋律、伴奏与噪声的字典。"""
 
     bpm = int(arrangement.get("bpm", 120))
     melody_wave = _render_square_sequence(arrangement.get("melody", []), bpm, sample_rate, amplitude=0.7)
     accompaniment_wave = _render_square_sequence(arrangement.get("accompaniment", []), bpm, sample_rate, amplitude=0.4)
     noise_wave = _render_noise_sequence(arrangement.get("noise", []), bpm, sample_rate)
 
-    mixed = _mix_tracks([melody_wave, accompaniment_wave, noise_wave])
-    if limit_seconds is not None and limit_seconds > 0:
-        max_samples = int(sample_rate * limit_seconds)
-        mixed = mixed[:max_samples]
+    def _truncate(track: np.ndarray) -> np.ndarray:
+        """针对需要预览的情况裁剪轨道长度。"""
+
+        if limit_seconds is not None and limit_seconds > 0:
+            max_samples = int(sample_rate * limit_seconds)
+            return track[:max_samples]
+        return track
+
+    return {
+        "main": _truncate(melody_wave),
+        "bg": _truncate(accompaniment_wave),
+        "noise": _truncate(noise_wave),
+    }
+
+
+def _build_arrangement_wave(arrangement: Dict[str, object], sample_rate: int, limit_seconds: float | None = None) -> np.ndarray:
+    """根据编曲结构生成混合波形，可选限制长度用于预览。"""
+
+    tracks = render_tracks(arrangement, sample_rate, limit_seconds=limit_seconds)
+    mixed = _mix_tracks(list(tracks.values()))
     return mixed
 
 
