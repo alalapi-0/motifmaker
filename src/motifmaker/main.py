@@ -3,7 +3,8 @@
 该模块提供一个统一的主菜单，启动时先询问用户使用控制台调试模式
 还是直接运行现有的 FastAPI + Web UI。控制台模式覆盖 CLI 与 Web 所有
 核心能力：从 Prompt 构建工程、查看与编辑规格、生成动机/曲式/和声
-分析、局部再生、渲染与保存。每一步操作都会输出详细的反馈信息，
+分析、局部再生、渲染与保存。现已补充动机参数查看与编辑，方便在
+调试过程中快速对比不同动机设定。每一步操作都会输出详细的反馈信息，
 便于调试与定位问题。
 
 运行方式：
@@ -212,7 +213,9 @@ class ConsoleDebugger:
             (
                 "查看规格概览",
                 "运行生成步骤并查看详细反馈",
+                "查看动机参数",
                 "调整全局参数",
+                "编辑动机参数",
                 "编辑曲式段落",
                 "局部再生成段落",
                 "渲染工程并导出",
@@ -223,12 +226,14 @@ class ConsoleDebugger:
         actions = {
             1: self._display_summary,
             2: self._inspect_generation_pipeline,
-            3: self._edit_global_settings,
-            4: self._edit_form_section,
-            5: self._regenerate_section,
-            6: self._render_project,
-            7: self._save_to_json,
-            8: self._reset,
+            3: self._view_motif_specs,
+            4: self._edit_global_settings,
+            5: self._edit_motif_params,
+            6: self._edit_form_section,
+            7: self._regenerate_section,
+            8: self._render_project,
+            9: self._save_to_json,
+            10: self._reset,
         }
         handler = actions.get(choice)
         if handler:
@@ -296,10 +301,16 @@ class ConsoleDebugger:
         assert self.spec is not None
         print("\n当前工程规格概览：")
         self._print_spec_brief(self.spec)
+        self._print_motif_specs(self.spec.motif_specs)
         self._print_section_details(self.spec.form)
         if self.last_render:
             print("\n最近一次渲染结果：")
             self._print_render_summary(self.last_render)
+
+    def _view_motif_specs(self) -> None:
+        assert self.spec is not None
+        print("\n当前动机参数设定：")
+        self._print_motif_specs(self.spec.motif_specs)
 
     def _inspect_generation_pipeline(self) -> None:
         assert self.spec is not None
@@ -406,6 +417,56 @@ class ConsoleDebugger:
             return
         print("参数已更新，最新概览如下：")
         self._print_spec_brief(self.spec)
+        self._print_motif_specs(self.spec.motif_specs)
+        self.last_render = None
+
+    def _edit_motif_params(self) -> None:
+        assert self.spec is not None
+        spec = self.spec
+        labels = list(spec.motif_specs)
+        if not labels:
+            print("当前工程没有可编辑的动机参数。")
+            return
+        print("\n可编辑的动机标签：")
+        for idx, label in enumerate(labels, start=1):
+            print(f"  {idx}. {label}")
+        index = _prompt_int(
+            "\n请选择动机编号：", minimum=1, maximum=len(labels)
+        )
+        assert index is not None
+        label = labels[index - 1]
+        current = spec.motif_specs.get(label, {})
+        print(f"正在编辑动机 {label}，留空保留原值。")
+        contour = _prompt(
+            f"  旋律轮廓 [{current.get('contour', '未设置')}]: ", allow_empty=True
+        )
+        rhythm = _prompt(
+            f"  节奏密度 [{current.get('rhythm_density', '未设置')}]: ", allow_empty=True
+        )
+        motif_style = _prompt(
+            f"  动机风格 [{current.get('motif_style', spec.motif_style)}]: ",
+            allow_empty=True,
+        )
+        updates: Dict[str, object] = {}
+        if contour:
+            updates["contour"] = contour
+        if rhythm:
+            updates["rhythm_density"] = rhythm
+        if motif_style:
+            updates["motif_style"] = motif_style
+        if not updates:
+            print("动机参数未发生变化。")
+            return
+        motif_specs = {name: dict(params) for name, params in spec.motif_specs.items()}
+        motif_specs[label].update(updates)
+        try:
+            self.spec = spec.model_copy(update={"motif_specs": motif_specs})
+        except Exception as exc:  # pragma: no cover - 具体错误由模型抛出
+            print(f"动机参数更新失败：{exc}")
+            return
+        self.last_render = None
+        print("动机参数已更新，当前设定如下：")
+        self._print_motif_specs(self.spec.motif_specs)
 
     def _edit_form_section(self) -> None:
         assert self.spec is not None
@@ -459,6 +520,7 @@ class ConsoleDebugger:
             return
         print("段落已更新，新的曲式概览如下：")
         self._print_section_details(self.spec.form)
+        self.last_render = None
 
     def _regenerate_section(self) -> None:
         assert self.spec is not None
@@ -484,6 +546,7 @@ class ConsoleDebugger:
             print(f"再生成失败：{exc}")
             return
         self.spec = updated
+        self.last_render = None
         section_summary = summaries.get(section_name, {})
         print("局部再生成完成，最新段落摘要：")
         print(json.dumps(section_summary, ensure_ascii=False, indent=2))
@@ -552,6 +615,26 @@ class ConsoleDebugger:
             print(
                 f"  {idx}. {section.section} | {section.bars} 小节 | 张力 {section.tension} | 动机 {section.motif_label}"
             )
+
+    @staticmethod
+    def _print_motif_specs(motif_specs: Dict[str, Dict[str, object]]) -> None:
+        print("\n动机参数：")
+        for label, params in motif_specs.items():
+            contour = params.get("contour", "-")
+            rhythm = params.get("rhythm_density", "-")
+            motif_style = params.get("motif_style", "-")
+            extras = {
+                key: value
+                for key, value in params.items()
+                if key not in {"contour", "rhythm_density", "motif_style"}
+            }
+            if extras:
+                extra_parts = ", ".join(f"{k}={v}" for k, v in extras.items())
+                print(
+                    f"  - {label}: 轮廓 {contour}, 节奏 {rhythm}, 风格 {motif_style} ({extra_parts})"
+                )
+            else:
+                print(f"  - {label}: 轮廓 {contour}, 节奏 {rhythm}, 风格 {motif_style}")
 
     @staticmethod
     def _print_render_summary(result: RenderResult) -> None:
