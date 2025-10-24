@@ -17,6 +17,7 @@ from fastapi.templating import Jinja2Templates
 from tools import generator
 from tools.cleanup import cleanup_outputs
 from tools import synth
+from tools import mixer
 from tools import db as project_db
 
 # Web 应用所在的根目录，便于拼装模板与静态文件路径
@@ -27,6 +28,7 @@ STATIC_DIR = BASE_DIR / "static"
 # 与 CLI 共用的 outputs 目录，所有音频与 JSON 临时文件都会写入这里
 OUTPUT_DIR = generator.OUTPUT_DIR
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+MIX_OUTPUT_PATH = OUTPUT_DIR / "mixed_latest.wav"
 
 app = FastAPI(title="MotifMaker 8-bit Web UI")
 project_db.init_db()
@@ -148,6 +150,20 @@ def _error_response(message: str, status_code: int = 400) -> JSONResponse:
     return JSONResponse(status_code=status_code, content={"error": True, "message": message})
 
 
+def _load_arrangement_data() -> Dict[str, Any]:
+    """从 outputs 目录读取最新编曲数据，供混音与渲染共用。"""
+
+    arrangement_file = OUTPUT_DIR / "arrangement.json"
+    if not arrangement_file.exists():
+        raise HTTPException(status_code=400, detail="Arrangement not found. Please generate melody first.")
+    try:
+        with arrangement_file.open("r", encoding="utf-8") as fh:
+            arrangement = json.load(fh)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=400, detail="Failed to read arrangement data.") from exc
+    return arrangement
+
+
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request) -> HTMLResponse:
     """渲染主页模板，提供按钮式操作界面。"""
@@ -208,6 +224,57 @@ async def generate_melody_endpoint() -> JSONResponse:
     return JSONResponse(status_code=200, content=response)
 
 
+@app.get("/mix/auto")
+async def mix_auto_endpoint() -> JSONResponse:
+    """生成自动混音参数，供前端填充滑块。"""
+
+    arrangement = _load_arrangement_data()
+    params = mixer.auto_mix(arrangement)
+    preview_file = OUTPUT_DIR / "preview_mix.wav"
+    response = {"ok": True, "params": params}
+    if preview_file.exists():
+        response["preview_url"] = f"/mix/preview?file={preview_file.name}"
+    return JSONResponse(status_code=200, content=response)
+
+
+@app.post("/mix/apply")
+async def mix_apply_endpoint(request: Request) -> JSONResponse:
+    """根据前端提交的参数执行混音并生成最新预览。"""
+
+    arrangement = _load_arrangement_data()
+    try:
+        payload = await request.json()
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse(status_code=400, content={"ok": False, "message": f"Invalid JSON: {exc}"})
+
+    params = payload.get("params") if isinstance(payload, dict) else payload
+    if not isinstance(params, dict):
+        return JSONResponse(status_code=400, content={"ok": False, "message": "Invalid mix parameters."})
+
+    try:
+        sanitized = mixer.apply_mixing(arrangement, params, MIX_OUTPUT_PATH)
+        preview_path = mixer.preview_mix(MIX_OUTPUT_PATH)
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse(status_code=500, content={"ok": False, "message": str(exc)})
+
+    response = {
+        "ok": True,
+        "params": sanitized,
+        "preview_url": f"/mix/preview?file={preview_path.name}",
+    }
+    return JSONResponse(status_code=200, content=response)
+
+
+@app.get("/mix/preview")
+async def mix_preview_endpoint(file: str = Query("preview_mix.wav", description="Name of the mix preview WAV file")) -> FileResponse:
+    """返回最新混音预览音频供前端播放器播放。"""
+
+    preview_path = _safe_output_path(file)
+    if not preview_path.exists():
+        raise HTTPException(status_code=404, detail="Mix preview not found.")
+    return FileResponse(preview_path, media_type="audio/wav", filename=preview_path.name)
+
+
 @app.get("/preview")
 async def preview(file: str = Query(..., description="Name of the preview WAV file")) -> FileResponse:
     """以文件下载的方式返回最新的预览 WAV 音频。"""
@@ -222,12 +289,7 @@ async def preview(file: str = Query(..., description="Name of the preview WAV fi
 async def render_final() -> JSONResponse:
     """渲染最终 8-bit MP3，并返回可供下载的链接。"""
 
-    arrangement_file = OUTPUT_DIR / "arrangement.json"
-    if not arrangement_file.exists():
-        raise HTTPException(status_code=400, detail="Arrangement not found. Please generate melody first.")
-
-    with arrangement_file.open("r", encoding="utf-8") as fh:
-        arrangement = json.load(fh)
+    arrangement = _load_arrangement_data()
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     wav_path = OUTPUT_DIR / f"final_{timestamp}.wav"
