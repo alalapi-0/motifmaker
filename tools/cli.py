@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from . import album as album_tools
 from . import generator
 from . import db as project_db
 from . import mixer
@@ -29,6 +30,15 @@ class SessionState(dict):
     mix_params: Optional[dict]
     mix_output: Optional[Path]
     mix_preview: Optional[Path]
+
+
+class AlbumSession(dict):
+    """专辑批量生成菜单的会话状态。"""
+
+    plan: Optional[dict]
+    results: Optional[list]
+    zip_path: Optional[Path]
+    auto_mix: bool
 
 
 def _compute_length_beats(arrangement: Optional[dict]) -> Optional[int]:
@@ -55,6 +65,41 @@ def _safe_int(value: object) -> Optional[int]:
     try:
         return int(value)
     except (TypeError, ValueError):
+        return None
+
+
+def _prompt_int(prompt: str, default: int, minimum: Optional[int] = None, maximum: Optional[int] = None) -> int:
+    """交互式询问整数输入，自动套用默认值与范围限制。"""
+
+    while True:
+        raw = input(f"{prompt} [{default}]: ").strip()
+        if not raw:
+            value = default
+        else:
+            try:
+                value = int(raw)
+            except ValueError:
+                print("Please enter a valid integer.")
+                continue
+        if minimum is not None and value < minimum:
+            print(f"Value must be >= {minimum}.")
+            continue
+        if maximum is not None and value > maximum:
+            print(f"Value must be <= {maximum}.")
+            continue
+        return value
+
+
+def _prompt_optional_int(prompt: str) -> Optional[int]:
+    """读取可选的整数输入，留空则返回 None。"""
+
+    raw = input(f"{prompt} (leave blank for none): ").strip()
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        print("Invalid integer, ignoring input.")
         return None
 
 
@@ -114,6 +159,178 @@ def _perform_mix(state: SessionState, params: dict) -> bool:
         state["mix_preview"] = preview_path
     print(f"Mix rendered to {MIX_OUTPUT_PATH}")
     return True
+
+
+def handle_album_plan(album_state: AlbumSession) -> None:
+    """专辑菜单第一步：规划批量生成任务。"""
+
+    title = input("Album title (leave blank for timestamp): ").strip()
+    if not title:
+        title = datetime.now().strftime("Album %Y-%m-%d %H:%M:%S")
+
+    num_tracks = _prompt_int("Number of tracks", default=4, minimum=1, maximum=20)
+    base_bpm = _prompt_int("Base BPM", default=120, minimum=60, maximum=200)
+    bars = _prompt_int("Bars per track", default=16, minimum=4, maximum=64)
+    base_seed = _prompt_optional_int("Base seed")
+    scale = input("Scale (e.g. C_major / A_minor) [C_major]: ").strip() or "C_major"
+    auto_mix_answer = input("Apply auto mix per track? (y/n) [y]: ").strip().lower() or "y"
+    auto_mix = auto_mix_answer.startswith("y")
+
+    try:
+        plan = album_tools.plan_album(
+            title=title,
+            num_tracks=num_tracks,
+            base_bpm=base_bpm,
+            bars_per_track=bars,
+            base_seed=base_seed,
+            scale=scale,
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"Failed to plan album: {exc}")
+        return
+
+    album_state.clear()
+    album_state["plan"] = plan
+    album_state["results"] = []
+    album_state["zip_path"] = None
+    album_state["auto_mix"] = auto_mix
+
+    output_dir = plan.get("output_dir")
+    print("Album planned successfully!")
+    print(f"Title       : {plan.get('title')}")
+    print(f"Tracks      : {plan.get('num_tracks')}")
+    print(f"Base BPM    : {plan.get('base_bpm')}")
+    print(f"Bars / track: {plan.get('bars_per_track')}")
+    if output_dir:
+        print(f"Output dir  : {output_dir}")
+    print("Track previews:")
+    for track in plan.get("tracks", []):
+        estimate = track.get("estimated_duration")
+        if isinstance(estimate, (int, float)):
+            duration_hint = f"~{estimate:.1f}s"
+        else:
+            duration_hint = "duration unknown"
+        print(
+            f"  #{track.get('index'):02d} {track.get('title')} - Seed {track.get('seed')} - "
+            f"{track.get('bpm')} BPM - {duration_hint}"
+        )
+    print("Use 'Start generation' after confirming the plan.")
+
+
+def handle_album_generation(album_state: AlbumSession) -> None:
+    """执行批量曲目生成，并在控制台打印进度条。"""
+
+    plan = album_state.get("plan")
+    if not plan:
+        print("Please plan an album first.")
+        return
+
+    tracks = plan.get("tracks", [])
+    if not tracks:
+        print("Album plan contains no tracks.")
+        return
+
+    out_dir = Path(plan.get("output_dir", OUTPUT_DIR))
+    auto_mix = bool(album_state.get("auto_mix", True))
+    total = len(tracks)
+    results = []
+
+    print(f"Generating album '{plan.get('title')}' with {total} tracks...")
+    for idx, track_spec in enumerate(tracks, start=1):
+        title = track_spec.get("title", f"Track {idx:02d}")
+        print(f"[{idx}/{total}] Rendering {title}...")
+        try:
+            result = album_tools.generate_track(track_spec, out_dir, apply_auto_mix=auto_mix)
+        except Exception as exc:  # noqa: BLE001
+            print(f"Generation failed on track {idx}: {exc}")
+            break
+        results.append(result)
+        progress = int(idx / total * 100)
+        bar = "#" * (progress // 5)
+        print(f"  Progress: [{bar:<20}] {progress:3d}%")
+    else:
+        try:
+            zip_path = album_tools.export_album_zip(plan, results, out_dir)
+        except Exception as exc:  # noqa: BLE001
+            print(f"Failed to export ZIP: {exc}")
+            return
+
+        album_state["results"] = results
+        album_state["zip_path"] = zip_path
+        print(f"Album export complete! ZIP located at: {zip_path}")
+        print("You can review the manifest.json and TRACKLIST.txt inside the folder.")
+        print("Remember: binary outputs stay in outputs/ and are not committed to Git.")
+        return
+
+    print("Album generation aborted due to errors. Partial files may exist under outputs/.")
+
+
+def handle_album_status(album_state: AlbumSession) -> None:
+    """打印当前规划、生成与打包状态摘要。"""
+
+    plan = album_state.get("plan")
+    if not plan:
+        print("No album plan available yet.")
+        return
+
+    print(f"Album title : {plan.get('title')}")
+    print(f"Output dir  : {plan.get('output_dir')}")
+    results = album_state.get("results") or []
+    if not results:
+        print("Tracks generated: 0")
+    else:
+        print(f"Tracks generated: {len(results)}/{plan.get('num_tracks')}")
+        for track in results:
+            print(
+                f"  #{track.get('index'):02d} {track.get('title')} - "
+                f"{track.get('duration_sec', 0):.1f}s - {track.get('bpm')} BPM"
+            )
+    zip_path = album_state.get("zip_path")
+    if zip_path:
+        print(f"ZIP ready at: {zip_path}")
+    else:
+        print("ZIP not exported yet. Run generation first.")
+
+
+def handle_album_download(album_state: AlbumSession) -> None:
+    """展示 ZIP 文件路径，方便用户复制下载。"""
+
+    zip_path = album_state.get("zip_path")
+    if not zip_path:
+        print("Album ZIP not available yet.")
+        return
+    print(f"Album archive stored at: {zip_path}")
+    print("Open the path manually or share the ZIP as needed.")
+
+
+def handle_album_menu(album_state: AlbumSession) -> None:
+    """专辑批量生成子菜单循环。"""
+
+    while True:
+        print(
+            """
+Album / Batch Export
+1) Plan album
+2) Start generation
+3) Show status
+4) Show ZIP path
+5) Back to main menu
+Select option [1-5]: """,
+            end="",
+        )
+        choice = input().strip()
+        if choice == "1":
+            handle_album_plan(album_state)
+        elif choice == "2":
+            handle_album_generation(album_state)
+        elif choice == "3":
+            handle_album_status(album_state)
+        elif choice == "4":
+            handle_album_download(album_state)
+        elif choice == "5":
+            break
+        else:
+            print("Invalid option. Please select a number between 1 and 5.")
 
 
 def _interactive_preview(result, preview_name: str, prompt: str) -> Optional[str]:
@@ -624,6 +841,8 @@ def main() -> None:
     state: SessionState = SessionState()
     project_db.init_db()
 
+    album_state: AlbumSession = AlbumSession()
+
     while True:
         print(
             """
@@ -634,9 +853,10 @@ MotifMaker - 8bit Simplified CLI
 4) Render 8-bit and export MP3
 5) Cleanup / Reset (delete outputs)
 6) Mix & Effect Control
-7) Project Management
-8) Exit
-Select option [1-8]: """,
+7) Album / Batch Export
+8) Project Management
+9) Exit
+Select option [1-9]: """,
             end="",
         )
         choice = input().strip()
@@ -654,12 +874,14 @@ Select option [1-8]: """,
         elif choice == "6":
             handle_mix_menu(state)
         elif choice == "7":
-            handle_project_menu(state)
+            handle_album_menu(album_state)
         elif choice == "8":
+            handle_project_menu(state)
+        elif choice == "9":
             print("Goodbye!")
             break
         else:
-            print("Invalid option. Please select a number between 1 and 8.")
+            print("Invalid option. Please select a number between 1 and 9.")
 
 
 if __name__ == "__main__":

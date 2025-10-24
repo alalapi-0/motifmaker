@@ -44,10 +44,31 @@ const mixOutputs = {
   eqHigh: document.getElementById("mix-eq-high-value"),
 };
 
+// 专辑面板相关元素引用，便于后续统一更新状态
+const albumTitleInput = document.getElementById("album-title");
+const albumTracksInput = document.getElementById("album-tracks");
+const albumBpmInput = document.getElementById("album-bpm");
+const albumBarsInput = document.getElementById("album-bars");
+const albumSeedInput = document.getElementById("album-seed");
+const albumScaleSelect = document.getElementById("album-scale");
+const albumAutoMixCheckbox = document.getElementById("album-auto-mix");
+const albumPlanButton = document.getElementById("album-btn-plan");
+const albumStartButton = document.getElementById("album-btn-start");
+const albumRefreshButton = document.getElementById("album-btn-refresh");
+const albumDownloadButton = document.getElementById("album-btn-download");
+const albumProgressBar = document.getElementById("album-progress");
+const albumStatusText = document.getElementById("album-status-text");
+const albumTrackList = document.getElementById("album-track-list");
+
 let currentMp3Name = null;
 let selectedProjectId = null;
 let projectCache = [];
 let latestMixPreviewUrl = null;
+let albumTaskId = null;
+let albumPlanData = null;
+let albumPollTimer = null;
+let albumZipUrl = null;
+let albumLastStatus = null;
 
 // 工具函数：统一处理日志输出，字符串直接打印，其他对象转为格式化 JSON
 function updateLog(data) {
@@ -93,6 +114,187 @@ function resetMediaState() {
   mixPreviewPlayer.removeAttribute("src");
   mixPreviewPlayer.load();
   latestMixPreviewUrl = null;
+}
+
+// 清理专辑面板的显示状态，通常在重新规划时调用
+function resetAlbumPanel() {
+  if (albumPollTimer) {
+    clearTimeout(albumPollTimer);
+    albumPollTimer = null;
+  }
+  albumProgressBar.value = 0;
+  albumStatusText.textContent = "No album task planned.";
+  albumTrackList.innerHTML = "";
+  albumZipUrl = null;
+  albumTaskId = null;
+  albumPlanData = null;
+  albumLastStatus = null;
+  updateAlbumControls();
+}
+
+// 根据当前任务状态切换按钮可用性
+function updateAlbumControls() {
+  const inProgress = albumPlanData && albumLastStatus === "running";
+  albumStartButton.disabled = !albumPlanData || inProgress;
+  albumRefreshButton.disabled = !albumTaskId;
+  albumDownloadButton.disabled = !albumZipUrl;
+}
+
+// 收集表单数据，准备发送给后端的 JSON 负载
+function collectAlbumPayload() {
+  const parsedSeed = albumSeedInput.value.trim();
+  return {
+    title: albumTitleInput.value.trim(),
+    num_tracks: Number(albumTracksInput.value) || 1,
+    base_bpm: Number(albumBpmInput.value) || 120,
+    bars_per_track: Number(albumBarsInput.value) || 16,
+    base_seed: parsedSeed === "" ? null : Number(parsedSeed),
+    scale: albumScaleSelect.value,
+    auto_mix: albumAutoMixCheckbox.checked,
+  };
+}
+
+// 渲染状态快照中的已生成曲目列表，包含可播放的音频标签
+function renderAlbumTrackList(results) {
+  albumTrackList.innerHTML = "";
+  results.forEach((track) => {
+    const li = document.createElement("li");
+    const duration = typeof track.duration_sec === "number" ? `${track.duration_sec.toFixed(1)}s` : "-";
+    li.textContent = `#${String(track.index).padStart(2, "0")} ${track.title || "Track"} (${track.bpm || 0} BPM, ${duration})`;
+    if (track.mp3_url) {
+      const audio = document.createElement("audio");
+      audio.controls = true;
+      audio.src = `${track.mp3_url}?t=${Date.now()}`;
+      audio.style.display = "block";
+      li.appendChild(audio);
+    }
+    albumTrackList.appendChild(li);
+  });
+}
+
+// 处理状态接口返回的数据，更新进度与提示文案
+function applyAlbumSnapshot(snapshot) {
+  albumProgressBar.value = Number(snapshot.progress || 0);
+  albumStatusText.textContent = `Status: ${snapshot.status || "unknown"} (${snapshot.progress || 0}%)`;
+  albumLastStatus = snapshot.status || null;
+  if (Array.isArray(snapshot.results)) {
+    renderAlbumTrackList(snapshot.results);
+  }
+  if (snapshot.zip_url) {
+    albumZipUrl = snapshot.zip_url;
+  }
+  if (snapshot.message) {
+    updateLog(snapshot);
+  }
+  updateAlbumControls();
+}
+
+// 启动或重置轮询定时器，默认每 3 秒刷新一次状态
+function scheduleAlbumPolling() {
+  if (albumPollTimer) {
+    clearTimeout(albumPollTimer);
+  }
+  albumPollTimer = setTimeout(() => {
+    refreshAlbumStatus(false);
+  }, 3000);
+}
+
+async function planAlbum() {
+  const payload = collectAlbumPayload();
+  updateLog({ message: "Planning album...", payload });
+  resetAlbumPanel();
+  try {
+    const response = await fetch("/album/plan", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await response.json();
+    if (!response.ok || data.error) {
+      updateLog(data);
+      return;
+    }
+    albumTaskId = data.task_id;
+    albumPlanData = data.plan;
+    albumZipUrl = null;
+    albumProgressBar.value = 0;
+    albumStatusText.textContent = `Planned ${data.plan.num_tracks} tracks. Ready to start.`;
+    albumTrackList.innerHTML = "";
+    if (albumPollTimer) {
+      clearTimeout(albumPollTimer);
+      albumPollTimer = null;
+    }
+    updateAlbumControls();
+    albumRefreshButton.disabled = false;
+    updateLog(data);
+  } catch (error) {
+    updateLog(`Failed to plan album: ${error}`);
+  }
+}
+
+async function startAlbumGeneration() {
+  if (!albumTaskId) {
+    updateLog("No album task to start. Plan the album first.");
+    return;
+  }
+  updateLog("Starting album generation...");
+  try {
+    const response = await fetch(`/album/generate/${albumTaskId}`, { method: "POST" });
+    const data = await response.json();
+    if (!response.ok || data.error) {
+      updateLog(data);
+      return;
+    }
+    albumProgressBar.value = 5;
+    albumStatusText.textContent = "Status: running (5%)";
+    updateAlbumControls();
+    scheduleAlbumPolling();
+  } catch (error) {
+    updateLog(`Failed to start album generation: ${error}`);
+  }
+}
+
+async function refreshAlbumStatus(manual = true) {
+  if (!albumTaskId) {
+    if (manual) {
+      updateLog("No album task to refresh.");
+    }
+    return;
+  }
+  try {
+    const response = await fetch(`/album/status/${albumTaskId}`);
+    const data = await response.json();
+    if (!response.ok || data.error) {
+      updateLog(data);
+      return;
+    }
+    applyAlbumSnapshot(data);
+    if (data.status === "running") {
+      scheduleAlbumPolling();
+    } else {
+      if (albumPollTimer) {
+        clearTimeout(albumPollTimer);
+        albumPollTimer = null;
+      }
+      if (data.zip_url) {
+        albumZipUrl = data.zip_url;
+        updateAlbumControls();
+      }
+    }
+    if (manual) {
+      updateLog(data);
+    }
+  } catch (error) {
+    updateLog(`Failed to fetch album status: ${error}`);
+  }
+}
+
+function downloadAlbumZip() {
+  if (!albumZipUrl) {
+    updateLog("Album ZIP not ready yet.");
+    return;
+  }
+  window.location.href = albumZipUrl;
 }
 
 // 实时更新滑块右侧的数值显示，方便精确调节
@@ -237,6 +439,30 @@ function updateProjectTable(projects) {
     highlightSelectedRow(null);
   }
 }
+
+// 绑定专辑面板按钮的点击事件
+albumPlanButton.addEventListener("click", (event) => {
+  event.preventDefault();
+  planAlbum();
+});
+
+albumStartButton.addEventListener("click", (event) => {
+  event.preventDefault();
+  startAlbumGeneration();
+});
+
+albumRefreshButton.addEventListener("click", (event) => {
+  event.preventDefault();
+  refreshAlbumStatus(true);
+});
+
+albumDownloadButton.addEventListener("click", (event) => {
+  event.preventDefault();
+  downloadAlbumZip();
+});
+
+// 页面初始化时根据默认状态刷新一次按钮可用性
+updateAlbumControls();
 
 // 调用 API 并刷新表格，出现错误时交给 requestJSON 统一处理
 async function refreshProjects() {
