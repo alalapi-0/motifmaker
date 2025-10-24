@@ -14,6 +14,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from tools import album as album_tools
 from tools import generator
 from tools.cleanup import cleanup_outputs
 from tools import synth
@@ -42,6 +43,10 @@ except AssertionError:
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 app.mount("/outputs", StaticFiles(directory=str(OUTPUT_DIR)), name="outputs")
+
+# 专辑批量任务状态容器，确保同一时间仅执行一个长任务
+album_tasks: Dict[str, album_tools.AlbumTask] = {}
+album_task_lock = threading.Lock()
 
 
 def _safe_output_path(filename: str) -> Path:
@@ -164,6 +169,18 @@ def _load_arrangement_data() -> Dict[str, Any]:
     return arrangement
 
 
+def _album_task_running(exclude: Optional[str] = None) -> bool:
+    """检查是否存在其他处于排队或运行状态的专辑任务。"""
+
+    with album_task_lock:
+        for task_id, task in album_tasks.items():
+            if exclude is not None and task_id == exclude:
+                continue
+            if task.status in {"queued", "running"}:
+                return True
+    return False
+
+
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request) -> HTMLResponse:
     """渲染主页模板，提供按钮式操作界面。"""
@@ -180,6 +197,115 @@ async def check_env() -> JSONResponse:
 
     status = generator.check_environment()
     return JSONResponse(status_code=200, content=status)
+
+
+@app.post("/album/plan")
+async def album_plan_endpoint(request: Request) -> JSONResponse:
+    """规划新的专辑批量任务，暂不启动渲染线程。"""
+
+    payload = await request.json()
+    title = str(payload.get("title") or datetime.now().strftime("Album %Y-%m-%d %H:%M:%S"))
+    num_tracks = int(payload.get("num_tracks", 1) or 1)
+    base_bpm = int(payload.get("base_bpm", 120) or 120)
+    bars_per_track = int(payload.get("bars_per_track", 16) or 16)
+    raw_seed = payload.get("base_seed")
+    base_seed: Optional[int]
+    if raw_seed in (None, "", "null"):
+        base_seed = None
+    else:
+        try:
+            base_seed = int(raw_seed)
+        except (TypeError, ValueError):
+            return _error_response("base_seed must be an integer or omitted")
+    scale = str(payload.get("scale", "C_major"))
+    auto_mix = bool(payload.get("auto_mix", True))
+
+    if _album_task_running():
+        return _error_response("Another album task is already running. Please wait.", status_code=409)
+
+    try:
+        plan = album_tools.plan_album(
+            title=title,
+            num_tracks=num_tracks,
+            base_bpm=base_bpm,
+            bars_per_track=bars_per_track,
+            base_seed=base_seed,
+            scale=scale,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _error_response(f"Failed to plan album: {exc}")
+
+    task_id = str(plan.get("id"))
+    task = album_tools.AlbumTask(id=task_id, plan=plan, apply_auto_mix=auto_mix)
+    with album_task_lock:
+        album_tasks[task_id] = task
+
+    return JSONResponse(status_code=200, content={"ok": True, "task_id": task_id, "plan": plan})
+
+
+@app.post("/album/generate/{task_id}")
+async def album_generate_endpoint(task_id: str) -> JSONResponse:
+    """启动专辑生成线程，顺序渲染所有曲目并实时更新任务。"""
+
+    with album_task_lock:
+        task = album_tasks.get(task_id)
+    if task is None:
+        return _error_response("Album task not found", status_code=404)
+
+    if task.status == "running":
+        return JSONResponse(status_code=200, content={"ok": True, "message": "Task already running"})
+
+    if _album_task_running(exclude=task_id):
+        return _error_response("Another album task is already running. Please wait.", status_code=409)
+
+    thread = threading.Thread(target=task.run, name=f"album-task-{task_id}", daemon=True)
+    with album_task_lock:
+        task.status = "queued"
+    thread.start()
+    return JSONResponse(status_code=200, content={"ok": True})
+
+
+@app.get("/album/status/{task_id}")
+async def album_status_endpoint(task_id: str) -> JSONResponse:
+    """返回专辑任务的状态快照，包含进度与已完成曲目。"""
+
+    with album_task_lock:
+        task = album_tasks.get(task_id)
+    if task is None:
+        return _error_response("Album task not found", status_code=404)
+
+    snapshot = task.snapshot()
+    snapshot["ok"] = True
+    return JSONResponse(status_code=200, content=snapshot)
+
+
+@app.get("/album/download/{task_id}")
+async def album_download_endpoint(task_id: str) -> FileResponse:
+    """当任务完成后提供 ZIP 下载，路径固定在 outputs 目录内。"""
+
+    with album_task_lock:
+        task = album_tasks.get(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Album task not found")
+
+    zip_path = task.zip_path
+    if not zip_path or not zip_path.exists():
+        raise HTTPException(status_code=400, detail="Album ZIP not ready")
+
+    return FileResponse(zip_path, filename=zip_path.name, media_type="application/zip")
+
+
+@app.delete("/album/cancel/{task_id}")
+async def album_cancel_endpoint(task_id: str) -> JSONResponse:
+    """标记取消专辑任务，生成循环会在下一首开始前停止。"""
+
+    with album_task_lock:
+        task = album_tasks.get(task_id)
+    if task is None:
+        return _error_response("Album task not found", status_code=404)
+
+    task.request_cancel()
+    return JSONResponse(status_code=200, content={"ok": True})
 
 
 @app.post("/generate_motif")

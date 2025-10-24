@@ -109,6 +109,23 @@ Web UI:
 * Manual sliders let you tweak sound.
 * Preview Mix for real-time listening.
 
+## Album / Batch Export
+
+MotifMaker can now generate complete 8-bit albums in one pass.
+
+* Plan an album with title, number of tracks, BPM, bars, seed, and scale.
+* Generate multiple tracks sequentially with optional auto-mix per song.
+* Export a ZIP containing all MP3 files, `manifest.json`, and `TRACKLIST.txt`.
+* Runtime artifacts are stored in `outputs/`; no binaries are committed to the repository.
+
+CLI:
+`python tools/cli.py` → "Album / Batch Export"
+
+Web UI:
+Use the "Album / Batch" panel to plan, start, monitor progress, and download the ZIP.
+
+Remember to clean up the `outputs/` directory if you want to remove generated albums.
+
 ## 🎨 New UI Flow (Version 0.3)
 - Black-Red Metal Theme
 - Step-by-Step Music Generation

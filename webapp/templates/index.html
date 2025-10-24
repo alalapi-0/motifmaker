@@ -114,6 +114,42 @@
       #mix-preview {
         width: 100%;
       }
+      #album-panel {
+        margin-top: 2rem;
+        background: #161b22;
+        padding: 1rem;
+        border-radius: 6px;
+      }
+      #album-form {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 1rem;
+      }
+      #album-form label {
+        display: flex;
+        flex-direction: column;
+        gap: 0.4rem;
+        font-size: 0.9rem;
+      }
+      #album-buttons {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        margin-top: 1rem;
+      }
+      #album-progress {
+        width: 100%;
+        margin-top: 1rem;
+        height: 18px;
+      }
+      #album-track-list {
+        list-style: none;
+        padding-left: 0;
+        margin-top: 1rem;
+      }
+      #album-track-list li {
+        margin-bottom: 0.4rem;
+      }
     </style>
   </head>
   <body>
@@ -145,6 +181,57 @@
 
     <!-- 日志信息展示区，显示接口返回的 JSON 数据 -->
     <pre id="log">Click a button to begin.</pre>
+
+    <!-- 专辑批量面板，提供参数输入与进度查看 -->
+    <section id="album-panel">
+      <h2>Album / Batch</h2>
+      <div id="album-form">
+        <label>
+          Title
+          <input id="album-title" type="text" placeholder="My 8bit Album" />
+        </label>
+        <label>
+          Tracks
+          <input id="album-tracks" type="number" min="1" max="20" value="4" />
+        </label>
+        <label>
+          Base BPM
+          <input id="album-bpm" type="number" min="60" max="200" value="120" />
+        </label>
+        <label>
+          Bars per Track
+          <input id="album-bars" type="number" min="4" max="64" value="16" />
+        </label>
+        <label>
+          Base Seed
+          <input id="album-seed" type="number" placeholder="Optional" />
+        </label>
+        <label>
+          Scale
+          <select id="album-scale">
+            <option value="C_major" selected>C_major</option>
+            <option value="A_minor">A_minor</option>
+            <option value="G_major">G_major</option>
+            <option value="E_minor">E_minor</option>
+          </select>
+        </label>
+        <label>
+          Auto Mix
+          <input id="album-auto-mix" type="checkbox" checked />
+        </label>
+      </div>
+      <div id="album-buttons">
+        <button id="album-btn-plan">Plan Album</button>
+        <button id="album-btn-start" disabled>Start Generation</button>
+        <button id="album-btn-refresh" disabled>Refresh Status</button>
+        <button id="album-btn-download" disabled>Download ZIP</button>
+      </div>
+      <progress id="album-progress" value="0" max="100"></progress>
+      <div id="album-status">
+        <p id="album-status-text">No album task planned.</p>
+        <ul id="album-track-list"></ul>
+      </div>
+    </section>
 
     <!-- 混音面板，允许用户调整音量、声像与效果 -->
     <section id="mixing-panel">
